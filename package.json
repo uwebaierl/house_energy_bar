@@ -1,0 +1,10 @@
+{
+  "name": "house-energy-bar",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check:syntax": "node --check dist/house_energy_bar.js"
+  }
+}
