@@ -16,3 +16,5 @@
 - Added `track_blend` (same behavior range as PowerFlow Bar) for smooth segment color blending.
 - Segment transitions now use smooth blended gradients between neighboring segments.
 - Updated House Energy Bar defaults (layout/color/divider/transparent background) to the new baseline config.
+- README installation section now matches Battery Bar and PowerFlow Bar (HACS button + manual flows).
+- Added README screenshots and new combined setup section with links to PowerFlow Bar and Battery Bar.

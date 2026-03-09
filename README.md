@@ -1,5 +1,9 @@
 # House Energy Bar
 
+## Screenshots
+
+<img style="max-width: 1000px; width: 100%; height: auto;" alt="House Energy Bar Overview" src="https://raw.githubusercontent.com/uwebaierl/house_energy_bar/main/docs/images/house_energy_bar_01.png" />
+
 House Energy Bar is a compact Home Assistant Lovelace card with 3 fixed generic segments.
 
 ## Features
@@ -11,28 +15,54 @@ House Energy Bar is a compact Home Assistant Lovelace card with 3 fixed generic 
 - Built-in visual editor for all supported options
 - Adjustable height and corner radius to match [Bubble Card](https://github.com/Clooos/Bubble-Card) layouts cleanly
 
+## Combined Setup
+
+House Energy Bar works well together with [PowerFlow Bar](https://github.com/uwebaierl/powerflow_bar) and [Battery Bar](https://github.com/uwebaierl/battery_bar) when you want a compact 3-card energy stack.
+
+<img style="max-width: 1000px; width: 100%; height: auto;" alt="House Energy Bar combined setup" src="https://raw.githubusercontent.com/uwebaierl/house_energy_bar/main/docs/images/house_energy_bar_combined_01.png" />
+
+For the complete setup, also see:
+
+- [PowerFlow Bar](https://github.com/uwebaierl/powerflow_bar) for PV, battery, home, and grid flow.
+- [Battery Bar](https://github.com/uwebaierl/battery_bar) for per-battery SoC, voltage, and temperature details.
+
 ## Installation
 
-### HACS
+### HACS (Recommended)
 
-After installing, confirm this Lovelace resource exists:
+- Add this repository via the link in Home Assistant.
+
+[![Open your Home Assistant instance and open this repository inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=uwebaierl&repository=house_energy_bar&category=plugin)
+
+- **House Energy Bar** should now be available in HACS. Click `INSTALL`.
+- The Lovelace resource is usually added automatically.
+- Reload the Home Assistant frontend if prompted.
+
+### HACS (manual)
+
+1. Ensure HACS is installed.
+2. Open HACS and add `https://github.com/uwebaierl/house_energy_bar` as a custom repository.
+3. Select category `Dashboard`.
+4. Search for **House Energy Bar** and install it.
+5. Reload resources if prompted.
+
+If HACS does not add the resource automatically, add this Dashboard resource manually:
 
 ```yaml
 url: /hacsfiles/house_energy_bar/house_energy_bar.js
 type: module
 ```
 
-### Manual
+### Manual Installation
 
-1. Copy `dist/house_energy_bar.js` to `www/community/house_energy_bar/`.
-2. Add this Lovelace resource:
+1. Download `house_energy_bar.js` from the [Releases](../../releases) page.
+2. Upload it to `www/community/house_energy_bar/` in your Home Assistant config directory.
+3. Add this resource in Dashboard configuration:
 
 ```yaml
 url: /local/community/house_energy_bar/house_energy_bar.js
 type: module
 ```
-
-If you see `Custom element not found: house-energy-bar`, hard-refresh the browser and verify the resource URL matches exactly.
 
 ## Full Example
 
