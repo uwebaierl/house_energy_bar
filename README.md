@@ -1,7 +1,5 @@
 # House Energy Bar
 
-## Screenshots
-
 <img style="max-width: 1000px; width: 100%; height: auto;" alt="House Energy Bar Overview" src="https://raw.githubusercontent.com/uwebaierl/house_energy_bar/main/docs/images/house_energy_bar_01.png" />
 
 House Energy Bar is a compact Home Assistant Lovelace card with 3 fixed generic segments.
