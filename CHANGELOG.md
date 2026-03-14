@@ -19,3 +19,5 @@
 - README installation section now matches Battery Bar and PowerFlow Bar (HACS button + manual flows).
 - Added README screenshots and new combined setup section with links to PowerFlow Bar and Battery Bar.
 - Removed the `Screenshots` heading from README while keeping images in place.
+- Replaced the custom editor UI with Home Assistant's built-in `ha-form` editor styling.
+- Replaced editor helper text with short, descriptive field labels for clearer default HA form layout.
