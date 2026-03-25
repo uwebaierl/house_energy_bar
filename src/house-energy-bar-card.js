@@ -42,7 +42,7 @@ const CONFIG_CLEANUP_STEPS = [
   migrateLegacyHouseEnergyColors,
 ];
 const EDITOR_CLEANUP_STEPS = [
-  createRemovePathsCleanup(["decimals", "segment_tokens"]),
+  createRemovePathsCleanup(["segment_tokens"]),
   migrateLegacyHouseEnergyColors,
 ];
 const SEGMENT_DEFS = SEGMENT_IDS.map((segmentId, index) => ({
@@ -163,7 +163,7 @@ export class HouseEnergyBarCard extends HTMLElement {
   }
 
   _renderModel() {
-    const config = this._config || DEFAULT_CONFIG;
+    const config = this._config || normalizeConfig(HouseEnergyBarCard.getStubConfig());
     const model = buildCardModel(config, this._hass);
     const visibleSegments = getVisibleSegmentDefs(config, model);
     const firstVisibleId = visibleSegments[0]?.id || "";
@@ -188,19 +188,19 @@ export class HouseEnergyBarCard extends HTMLElement {
         return;
       }
 
-      applyMetric(segmentRefs.primary, segmentModel.primary, { settleOnChange: true });
+      applyMetric(this._hass, segmentRefs.primary, segmentModel.primary, { settleOnChange: true });
       segmentRefs.secondaries.forEach((secondaryRef, index) => {
-        applyMetric(secondaryRef, segmentModel.chips[index], { hideWhenUnavailable: true });
+        applyMetric(this._hass, secondaryRef, segmentModel.chips[index], { hideWhenUnavailable: true });
       });
       syncChipRowVisibility(segmentRefs.chipRow, ...segmentRefs.secondaries);
     });
 
-    this._applySectionBackgrounds(config.colors || DEFAULT_CONFIG.colors, config.track_blend, config.fade_between_segments, visibleSegments);
+    this._applySectionBackgrounds(config.colors, config.track_blend, config.fade_between_segments, visibleSegments);
   }
 
   _applyTheme() {
-    const config = this._config || DEFAULT_CONFIG;
-    const colors = config.colors || DEFAULT_CONFIG.colors;
+    const config = this._config || normalizeConfig(HouseEnergyBarCard.getStubConfig());
+    const colors = config.colors;
     const trackTextColor = pickBestTextColor(colors.track, colors.text_light, colors.text_dark);
 
     this.style.setProperty("--bb-bar-height", `${config.bar_height}px`);
@@ -217,7 +217,7 @@ export class HouseEnergyBarCard extends HTMLElement {
   }
 
   _applySectionBackgrounds(colors, trackBlend, fadeBetweenSegments, visibleSegments) {
-    const trackColor = normalizeHexColor(colors.track, DEFAULT_CONFIG.colors.track);
+    const trackColor = normalizeHexColor(colors.track, "#000000");
     const blendAmount = clamp(0.1, Number(trackBlend) || DEFAULT_CONFIG.track_blend, 0.4);
     const activeSegments = Array.isArray(visibleSegments) && visibleSegments.length > 0
       ? visibleSegments
@@ -368,7 +368,7 @@ class HouseEnergyBarEditor extends HTMLElement {
     if (useOverrides) {
       nextRaw.colors = {
         ...resolveEditorBackgroundColor(value.colors, this._rawConfig?.colors),
-        ...pickHouseColorOverrides(this._config?.colors || DEFAULT_CONFIG.colors),
+        ...pickHouseColorOverrides(this._config?.colors),
         ...(hadOverrides ? pickHouseEditorColorOverrides(value.colors) : {}),
       };
       nextRaw.track_blend = normalizeTrackBlendOverrideValue(
@@ -393,7 +393,7 @@ class HouseEnergyBarEditor extends HTMLElement {
   }
 }
 
-function applyMetric(button, metric, options = {}) {
+function applyMetric(hass, button, metric, options = {}) {
   if (!button) {
     return;
   }
@@ -414,14 +414,7 @@ function applyMetric(button, metric, options = {}) {
 
   const iconEl = button.querySelector(".metric-icon");
   if (iconEl) {
-    const icon = metric?.icon || "";
-    if (icon) {
-      iconEl.setAttribute("icon", icon);
-      iconEl.hidden = false;
-    } else {
-      iconEl.removeAttribute("icon");
-      iconEl.hidden = true;
-    }
+    syncEntityIcon(iconEl, hass, metric?.stateObj || null);
   }
 
   if (options.settleOnChange && shouldAnimatePrimarySettle(previousValue, nextValue)) {
@@ -456,10 +449,29 @@ function buildMetricButton(ref, primary) {
   const iconClass = primary ? "metric-icon metric-icon--primary" : "metric-icon metric-icon--chip";
   return `
     <button class="${buttonClass}" data-ref="${ref}" type="button">
-      <ha-icon class="${iconClass}" hidden></ha-icon>
+      <ha-state-icon class="${iconClass}" hidden></ha-state-icon>
       <span class="metric-text">—</span>
     </button>
   `;
+}
+
+function syncEntityIcon(iconEl, hass, stateObj) {
+  if (!iconEl) {
+    return;
+  }
+
+  if (stateObj) {
+    iconEl.hass = hass || null;
+    iconEl.stateObj = stateObj;
+    iconEl.state = stateObj;
+    iconEl.hidden = false;
+    return;
+  }
+
+  iconEl.hass = hass || null;
+  iconEl.stateObj = null;
+  iconEl.state = null;
+  iconEl.hidden = true;
 }
 
 function shouldAnimatePrimarySettle(previousValue, nextValue) {
@@ -926,14 +938,14 @@ function syncEditorFormsHass(forms, hass) {
 function pickHouseColorOverrides(colors) {
   const source = colors && typeof colors === "object" ? colors : {};
   return {
-    track: source.track || DEFAULT_CONFIG.colors.track,
-    text_light: source.text_light || source.text || DEFAULT_CONFIG.colors.text_light,
-    text_dark: source.text_dark || source.text || DEFAULT_CONFIG.colors.text_dark,
-    divider: source.divider || DEFAULT_CONFIG.colors.divider,
-    energy_source: source.energy_source || DEFAULT_CONFIG.colors.energy_source,
-    energy_storage_supply: source.energy_storage_supply || DEFAULT_CONFIG.colors.energy_storage_supply,
-    grid_import: source.grid_import || DEFAULT_CONFIG.colors.grid_import,
-    grid_export: source.grid_export || DEFAULT_CONFIG.colors.grid_export,
+    track: source.track || "",
+    text_light: source.text_light || source.text || "",
+    text_dark: source.text_dark || source.text || "",
+    divider: source.divider || "",
+    energy_source: source.energy_source || "",
+    energy_storage_supply: source.energy_storage_supply || "",
+    grid_import: source.grid_import || "",
+    grid_export: source.grid_export || "",
   };
 }
 

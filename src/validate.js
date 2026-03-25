@@ -8,7 +8,6 @@ import {
 import {
   isKnownColorPreset,
   mergeColorPresetTokens,
-  normalizeColorPresetName,
   resolveColorPresetTrackBlend,
 } from "./_shared/color-presets.js";
 
@@ -75,33 +74,33 @@ export function normalizeConfig(config) {
 
   return {
     type: CARD_TYPE,
-    color_preset: normalizeColorPresetName(source.color_preset),
-    bar_height: clampNumber(source.bar_height, 24, 72, DEFAULT_CONFIG.bar_height),
-    corner_radius: clampNumber(source.corner_radius, 0, 30, DEFAULT_CONFIG.corner_radius),
-    track_blend: clampNumber(
-      source.track_blend,
-      0.1,
-      0.4,
-      resolveColorPresetTrackBlend(source.color_preset, DEFAULT_CONFIG.track_blend),
-    ),
-    fade_between_segments: typeof source.fade_between_segments === "boolean"
-      ? source.fade_between_segments
-      : DEFAULT_CONFIG.fade_between_segments,
-    show_solar_segment: typeof source.show_solar_segment === "boolean"
-      ? source.show_solar_segment
-      : DEFAULT_CONFIG.show_solar_segment,
-    background_transparent: typeof source.background_transparent === "boolean"
-      ? source.background_transparent
-      : DEFAULT_CONFIG.background_transparent,
-    show_divider: typeof source.show_divider === "boolean"
-      ? source.show_divider
-      : DEFAULT_CONFIG.show_divider,
+    color_preset: source.color_preset === undefined ? DEFAULT_CONFIG.color_preset : source.color_preset,
+    bar_height: source.bar_height === undefined ? DEFAULT_CONFIG.bar_height : Number(source.bar_height),
+    corner_radius: source.corner_radius === undefined ? DEFAULT_CONFIG.corner_radius : Number(source.corner_radius),
+    track_blend: source.track_blend === undefined
+      ? resolveColorPresetTrackBlend(source.color_preset, DEFAULT_CONFIG.track_blend)
+      : Number(source.track_blend),
+    fade_between_segments: source.fade_between_segments === undefined
+      ? DEFAULT_CONFIG.fade_between_segments
+      : source.fade_between_segments,
+    show_solar_segment: source.show_solar_segment === undefined
+      ? DEFAULT_CONFIG.show_solar_segment
+      : source.show_solar_segment,
+    background_transparent: source.background_transparent === undefined
+      ? DEFAULT_CONFIG.background_transparent
+      : source.background_transparent,
+    show_divider: source.show_divider === undefined
+      ? DEFAULT_CONFIG.show_divider
+      : source.show_divider,
     entities: normalizeEntities(entitiesInput),
-    colors: mergeColorPresetTokens(
-      source.color_preset,
-      DEFAULT_CONFIG.colors,
-      normalizeColorOverrides(colorsInput),
-    ),
+    colors: {
+      background: normalizeColor(colorsInput.background, DEFAULT_CONFIG.colors.background),
+      ...mergeColorPresetTokens(
+        source.color_preset,
+        {},
+        normalizeColorOverrides(colorsInput),
+      ),
+    },
   };
 }
 
@@ -112,27 +111,19 @@ function validateRange(value, key, min, max) {
   }
 }
 
-function clampNumber(value, min, max, fallback) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, n));
-}
-
-function normalizeRequiredEntity(value, fallback) {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return fallback;
+function normalizeRequiredEntity(value) {
+  if (typeof value !== "string") {
+    return "";
   }
   return value.trim();
 }
 
-function normalizeOptionalEntity(value, fallback) {
+function normalizeOptionalEntity(value) {
   if (value === undefined || value === null) {
-    return fallback;
+    return "";
   }
   if (typeof value !== "string") {
-    return fallback;
+    return "";
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : "";
@@ -149,11 +140,11 @@ function normalizeEntities(entitiesInput) {
   const entities = {};
 
   for (const key of REQUIRED_ENTITY_KEYS) {
-    entities[key] = normalizeRequiredEntity(entitiesInput[key], DEFAULT_CONFIG.entities[key]);
+    entities[key] = normalizeRequiredEntity(entitiesInput[key]);
   }
 
   for (const key of OPTIONAL_ENTITY_KEYS) {
-    entities[key] = normalizeOptionalEntity(entitiesInput[key], DEFAULT_CONFIG.entities[key]);
+    entities[key] = normalizeOptionalEntity(entitiesInput[key]);
   }
 
   return entities;
@@ -163,7 +154,7 @@ function validateColorPreset(value) {
   if (value === undefined) {
     return;
   }
-  if (!isKnownColorPreset(value)) {
+  if (typeof value !== "string" || !isKnownColorPreset(value)) {
     throw new Error("color_preset must be a supported preset name.");
   }
 }

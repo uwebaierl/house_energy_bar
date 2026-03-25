@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Changed
+- Removed prefilled example entity ids, removed hardcoded metric fallback labels/titles, and made preset colors the only semantic color baseline outside explicit manual overrides.
+- Removed the remaining legacy decimal cleanup and raw-state formatting fallback so displayed values now rely only on Home Assistant's entity formatting.
+- Removed hardcoded metric icon fallbacks so visible icons now always come from the configured Home Assistant entities.
 - Added an optional PV lead segment for House Energy Bar, including a `show_solar_segment` toggle at the top of `Entities`, semantic YAML keys (`entities.pv_*`, `entities.grid_import_*`, `entities.battery_output_*`, and `entities.grid_export_*`), and `colors.energy_source` support in presets and manual overrides.
 - Added a `fade_between_segments` toggle in the Colors section as an opt-in control; the default rendering now keeps solid boundaries between segments unless the toggle is enabled.
 - Stopped persisting default `colors.background` in YAML from the visual editor when no explicit background override is set.
@@ -15,7 +18,6 @@
 - Restored `track_blend` as an optional manual override, exposed it in the Colors section when custom overrides are enabled, and kept the `0.10..0.40` range.
 - Normalized unavailable metric handling so configured entities stay visible as `—`, while optional empty entity slots remain hidden.
 - Switched value formatting to Home Assistant's native entity formatter and removed the card-specific decimal controls from docs/editor output.
-- Added a shared editor cleanup pipeline so legacy config keys like `decimals` are removed automatically in the visual editor.
 - Added shared `color_preset` support with the same global semantic token model used by Battery Bar and PowerFlow Bar.
 - Replaced per-segment preset colors with semantic `colors.*` tokens for the fixed House slots (`grid_import`, `energy_storage_supply`, and `grid_export`, plus shared background/track/text/divider colors).
 - Added automatic migration for legacy `colors.segment1`, `colors.segment2`, and `colors.segment3` overrides.

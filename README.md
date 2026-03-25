@@ -123,26 +123,26 @@ colors:
 | `colors.background`            | `#000000`                               | Full card background color                            |
 | `colors.track`                 | `#EAECEF`                               | Track color behind segment values                     |
 | `colors.text_light`            | `#F4F7FA`                               | Light text/icon color used when it gives better contrast |
-| `colors.text_dark`             | `#2E2E2E`                               | Dark text/icon color used when it gives better contrast |
-| `colors.divider`               | `#dbdde0`                               | Divider color between visible segments                |
-| `colors.energy_source`         | `#E6C86E`                               | Shared semantic token for PV production               |
-| `colors.energy_storage_supply` | `#5B9BCF`                               | Shared semantic token for battery output              |
-| `colors.grid_import`           | `#C99A6A`                               | Shared semantic token for grid import                 |
-| `colors.grid_export`           | `#8C6BB3`                               | Shared semantic token for grid export                 |
-| `entities.pv_primary`          | `sensor.solar_production_daily`         | PV top row entity (used when `show_solar_segment` is `true`) |
+| `colors.text_dark`             | preset-dependent                        | Dark text/icon color used when it gives better contrast |
+| `colors.divider`               | preset-dependent                        | Divider color between visible segments                |
+| `colors.energy_source`         | preset-dependent                        | Shared semantic token for PV production               |
+| `colors.energy_storage_supply` | preset-dependent                        | Shared semantic token for battery output              |
+| `colors.grid_import`           | preset-dependent                        | Shared semantic token for grid import                 |
+| `colors.grid_export`           | preset-dependent                        | Shared semantic token for grid export                 |
+| `entities.pv_primary`          | `""`                                    | PV top row entity (used when `show_solar_segment` is `true`) |
 | `entities.pv_secondary_1`      | `""`                                    | PV second row entity 1 (optional)                     |
 | `entities.pv_secondary_2`      | `""`                                    | PV second row entity 2 (optional)                     |
-| `entities.grid_import_primary` | `sensor.grid_import_daily`              | Grid import top row entity (required)                 |
+| `entities.grid_import_primary` | required                                | Grid import top row entity (required)                 |
 | `entities.grid_import_secondary_1` | `""`                               | Grid import second row entity 1 (optional)            |
 | `entities.grid_import_secondary_2` | `""`                               | Grid import second row entity 2 (optional)            |
-| `entities.battery_output_primary` | `sensor.battery_output_daily`       | Battery output top row entity (required)              |
+| `entities.battery_output_primary` | required                           | Battery output top row entity (required)              |
 | `entities.battery_output_secondary_1` | `""`                            | Battery output second row entity 1 (optional)         |
 | `entities.battery_output_secondary_2` | `""`                            | Battery output second row entity 2 (optional)         |
-| `entities.grid_export_primary` | `sensor.grid_export_daily`              | Grid export top row entity (required)                 |
+| `entities.grid_export_primary` | required                                | Grid export top row entity (required)                 |
 | `entities.grid_export_secondary_1` | `""`                               | Grid export second row entity 1 (optional)            |
 | `entities.grid_export_secondary_2` | `""`                               | Grid export second row entity 2 (optional)            |
 
-Color resolution priority for preset-controlled colors: built-in fallback < selected `color_preset` < manual `colors.*` overrides.
+Color resolution priority for preset-controlled colors: selected `color_preset` < manual `colors.*` overrides.
 
 Legacy `colors.text` is still accepted and is migrated to both `colors.text_light` and `colors.text_dark`.
 
@@ -151,6 +151,10 @@ Legacy `colors.text` is still accepted and is migrated to both `colors.text_ligh
 In the visual editor, `show_solar_segment` lives at the top of `Entities`, and the PV segment color is controlled by `colors.energy_source` in the same preset/override flow as the other cards. The House Energy YAML keys use semantic names: `entities.pv_*`, `entities.grid_import_*`, `entities.battery_output_*`, and `entities.grid_export_*`. `fade_between_segments` is always available in `Colors`, while `Use custom color overrides` turns manual semantic colors and `track_blend` on or off. Background stays independent in `Layout & Motion`, so changing the card background does not activate manual color overrides or block presets.
 
 Preset styles: `preset_1` Classic, `preset_2` Industrial, `preset_3` Coffee, `preset_4` Ocean, `preset_5` Forest.
+
+Visible metric icons always come from the configured Home Assistant entities.
+
+The card and visual editor no longer prefill entity ids.
 
 ## Development
 
