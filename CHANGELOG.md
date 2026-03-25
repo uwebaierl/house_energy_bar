@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-03-25
+
 ### Changed
 - Removed the forced full-width preview placeholder wrapper so the chooser/editor description centers correctly.
 - Shortened the chooser/editor preview description so House Energy Bar aligns more evenly with the other card previews.
