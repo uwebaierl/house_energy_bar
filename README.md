@@ -65,17 +65,21 @@ url: /local/community/house_energy_bar/house_energy_bar.js
 type: module
 ```
 
-## Full Example
+## Card YAML
 
 ```yaml
 type: custom:house-energy-bar
 bar_height: 56
 corner_radius: 28
+# Optional: enable this to show the PV lead segment
 show_solar_segment: false
 background_transparent: true
+# Optional: enable this to show divider lines between segments
 show_divider: false
 color_preset: preset_1
+# Optional: only set this when overriding the preset-driven track blend
 track_blend: 0.15
+# Optional: enable this to fade neighboring segment colors into each other
 fade_between_segments: false
 entities:
   pv_primary: sensor.solar_production_daily
@@ -90,6 +94,7 @@ entities:
   grid_export_primary: sensor.grid_export_daily
   grid_export_secondary_1: sensor.grid_export_detail_1
   grid_export_secondary_2: ""
+# Optional: add this block only when using manual color overrides
 colors:
   background: "#000000"
   track: "#EAECEF"
