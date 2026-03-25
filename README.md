@@ -2,15 +2,20 @@
 
 <img style="max-width: 1000px; width: 100%; height: auto;" alt="House Energy Bar Overview" src="https://raw.githubusercontent.com/uwebaierl/house_energy_bar/main/docs/images/house_energy_bar_01.png" />
 
-House Energy Bar is a compact Home Assistant Lovelace card with 3 fixed generic segments.
+House Energy Bar is a compact Home Assistant Lovelace card with 3 core semantic segments and an optional PV segment on the left.
 
 ## Features
 
-- Fixed 3-segment generic layout
+- Fixed Grid Import, Battery Output, and Grid Export segments, plus an optional PV lead segment
 - Each segment supports 1 required primary metric and 2 optional secondary metrics
 - Secondary metrics are hidden when entity ids are empty or omitted
-- Nested YAML configuration with `entities`, `decimals`, and `colors`
+- Configured metrics stay visible as `—` when their entity is missing or unavailable, while optional empty slots remain hidden
+- Nested YAML configuration with `entities` and semantic `colors`
+- Global semantic `color_preset` themes shared across all three cards
+- Uses Home Assistant's own localized entity formatting and entity-level display precision
 - Built-in visual editor for all supported options
+- The visual editor includes a dedicated Colors section in the same native Home Assistant expandable panel stack as the other editor sections, with a preset selector and an optional custom-color override toggle
+- Visual editor automatically removes legacy config keys it knows how to migrate
 - Adjustable height and corner radius to match [Bubble Card](https://github.com/Clooos/Bubble-Card) layouts cleanly
 
 ## Combined Setup
@@ -68,30 +73,35 @@ type: module
 type: custom:house-energy-bar
 bar_height: 56
 corner_radius: 28
-track_blend: 0.15
+show_solar_segment: false
 background_transparent: true
 show_divider: false
+color_preset: preset_1
+track_blend: 0.15
+fade_between_segments: false
 entities:
-  segment1_primary: sensor.segment1_primary
-  segment1_secondary_1: ""
-  segment1_secondary_2: ""
-  segment2_primary: sensor.segment2_primary
-  segment2_secondary_1: sensor.segment2_secondary_1
-  segment2_secondary_2: ""
-  segment3_primary: sensor.segment3_primary
-  segment3_secondary_1: sensor.segment3_secondary_1
-  segment3_secondary_2: ""
-decimals:
-  primary: 2
-  secondary: 2
+  pv_primary: sensor.solar_production_daily
+  pv_secondary_1: ""
+  pv_secondary_2: ""
+  grid_import_primary: sensor.grid_import_daily
+  grid_import_secondary_1: ""
+  grid_import_secondary_2: ""
+  battery_output_primary: sensor.battery_output_daily
+  battery_output_secondary_1: sensor.battery_output_detail_1
+  battery_output_secondary_2: ""
+  grid_export_primary: sensor.grid_export_daily
+  grid_export_secondary_1: sensor.grid_export_detail_1
+  grid_export_secondary_2: ""
 colors:
   background: "#000000"
   track: "#EAECEF"
-  segment1: "#C99A6A"
-  segment2: "#5B9BCF"
-  segment3: "#8C6BB3"
-  text: "#2E2E2E"
+  text_light: "#F4F7FA"
+  text_dark: "#2E2E2E"
   divider: "#dbdde0"
+  energy_source: "#E6C86E"
+  energy_storage_supply: "#5B9BCF"
+  grid_import: "#C99A6A"
+  grid_export: "#8C6BB3"
 ```
 
 ## Options
@@ -101,27 +111,43 @@ colors:
 | `type`                         | required                                | Must be `custom:house-energy-bar`                     |
 | `bar_height`                   | `56`                                    | Clamp range `24..72`                                  |
 | `corner_radius`                | `28`                                    | Clamp range `0..30`                                   |
-| `track_blend`                  | `0.15`                                  | Clamp range `0.15..0.3` for segment/track blending    |
+| `show_solar_segment`           | `false`                                 | Adds an optional PV segment as the first segment     |
 | `background_transparent`       | `true`                                  | Hides full card background when enabled (track remains visible) |
 | `show_divider`                 | `false`                                 | Shows divider lines between sections                  |
+| `color_preset`                 | `preset_1`                              | Global semantic preset baseline shared across all three cards |
+| `track_blend`                  | preset-dependent                        | Range `0.10..0.40`; optional manual override for track/color mixing |
+| `fade_between_segments`        | `false`                                 | If `true`, sections fade into neighboring colors; default is solid section boundaries |
 | `colors.background`            | `#000000`                               | Full card background color                            |
 | `colors.track`                 | `#EAECEF`                               | Track color behind segment values                     |
-| `colors.segment1`              | `#C99A6A`                               | Segment 1 color before track blending                 |
-| `colors.segment2`              | `#5B9BCF`                               | Segment 2 color before track blending                 |
-| `colors.segment3`              | `#8C6BB3`                               | Segment 3 color before track blending                 |
-| `colors.text`                  | `#2E2E2E`                               | Text and icon color                                   |
-| `colors.divider`               | `#dbdde0`                               | Divider color between Segment 1/2/3                   |
-| `entities.segment1_primary`    | `sensor.segment1_primary`              | Segment 1 primary (required)                          |
-| `entities.segment1_secondary_1`| `""`                                   | Segment 1 secondary 1 (optional)                      |
-| `entities.segment1_secondary_2`| `""`                                   | Segment 1 secondary 2 (optional)                      |
-| `entities.segment2_primary`    | `sensor.segment2_primary`              | Segment 2 primary (required)                          |
-| `entities.segment2_secondary_1`| `""`                                   | Segment 2 secondary 1 (optional)                      |
-| `entities.segment2_secondary_2`| `""`                                   | Segment 2 secondary 2 (optional)                      |
-| `entities.segment3_primary`    | `sensor.segment3_primary`              | Segment 3 primary (required)                          |
-| `entities.segment3_secondary_1`| `""`                                   | Segment 3 secondary 1 (optional)                      |
-| `entities.segment3_secondary_2`| `""`                                   | Segment 3 secondary 2 (optional)                      |
-| `decimals.primary`             | `2`                                     | Clamp range `0..2` for all primary metrics            |
-| `decimals.secondary`           | `2`                                     | Clamp range `0..2` for all secondary metrics          |
+| `colors.text_light`            | `#F4F7FA`                               | Light text/icon color used when it gives better contrast |
+| `colors.text_dark`             | `#2E2E2E`                               | Dark text/icon color used when it gives better contrast |
+| `colors.divider`               | `#dbdde0`                               | Divider color between visible segments                |
+| `colors.energy_source`         | `#E6C86E`                               | Shared semantic token for PV production               |
+| `colors.energy_storage_supply` | `#5B9BCF`                               | Shared semantic token for battery output              |
+| `colors.grid_import`           | `#C99A6A`                               | Shared semantic token for grid import                 |
+| `colors.grid_export`           | `#8C6BB3`                               | Shared semantic token for grid export                 |
+| `entities.pv_primary`          | `sensor.solar_production_daily`         | PV top row entity (used when `show_solar_segment` is `true`) |
+| `entities.pv_secondary_1`      | `""`                                    | PV second row entity 1 (optional)                     |
+| `entities.pv_secondary_2`      | `""`                                    | PV second row entity 2 (optional)                     |
+| `entities.grid_import_primary` | `sensor.grid_import_daily`              | Grid import top row entity (required)                 |
+| `entities.grid_import_secondary_1` | `""`                               | Grid import second row entity 1 (optional)            |
+| `entities.grid_import_secondary_2` | `""`                               | Grid import second row entity 2 (optional)            |
+| `entities.battery_output_primary` | `sensor.battery_output_daily`       | Battery output top row entity (required)              |
+| `entities.battery_output_secondary_1` | `""`                            | Battery output second row entity 1 (optional)         |
+| `entities.battery_output_secondary_2` | `""`                            | Battery output second row entity 2 (optional)         |
+| `entities.grid_export_primary` | `sensor.grid_export_daily`              | Grid export top row entity (required)                 |
+| `entities.grid_export_secondary_1` | `""`                               | Grid export second row entity 1 (optional)            |
+| `entities.grid_export_secondary_2` | `""`                               | Grid export second row entity 2 (optional)            |
+
+Color resolution priority for preset-controlled colors: built-in fallback < selected `color_preset` < manual `colors.*` overrides.
+
+Legacy `colors.text` is still accepted and is migrated to both `colors.text_light` and `colors.text_dark`.
+
+`colors.background` stays separate from presets and controls only the outer card background. In the visual editor it is only written to YAML when you explicitly set a non-default background override.
+
+In the visual editor, `show_solar_segment` lives at the top of `Entities`, and the PV segment color is controlled by `colors.energy_source` in the same preset/override flow as the other cards. The House Energy YAML keys use semantic names: `entities.pv_*`, `entities.grid_import_*`, `entities.battery_output_*`, and `entities.grid_export_*`. `fade_between_segments` is always available in `Colors`, while `Use custom color overrides` turns manual semantic colors and `track_blend` on or off. Background stays independent in `Layout & Motion`, so changing the card background does not activate manual color overrides or block presets.
+
+Preset styles: `preset_1` Classic, `preset_2` Industrial, `preset_3` Coffee, `preset_4` Ocean, `preset_5` Forest.
 
 ## Development
 

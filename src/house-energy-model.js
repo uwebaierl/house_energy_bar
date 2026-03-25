@@ -1,12 +1,19 @@
-import { ENTITY_KEYS, SEGMENT_ENTITY_MAP, SEGMENT_IDS } from "./constants.js";
+import { resolveEntityStatus } from "./_shared/availability.js";
+import { formatEntityStateValue } from "./_shared/entity-format.js";
+import {
+  ENTITY_KEYS,
+  PV_SEGMENT_ID,
+  SEGMENT_ENTITY_MAP,
+  SEGMENT_IDS,
+  SEGMENT_LABELS,
+} from "./constants.js";
 
-const UNAVAILABLE_STATES = new Set(["", "unknown", "unavailable", "none", "null", "nan"]);
-const formatterCache = new Map();
 const DEFAULT_METRIC_ICONS = {
   secondary: "mdi:information-outline",
-  ...Object.fromEntries(
-    SEGMENT_IDS.map((segmentId, index) => [SEGMENT_ENTITY_MAP[segmentId].primary, `mdi:numeric-${index + 1}-circle-outline`]),
-  ),
+  [SEGMENT_ENTITY_MAP[PV_SEGMENT_ID].primary]: "mdi:white-balance-sunny",
+  [SEGMENT_ENTITY_MAP.grid_import.primary]: "mdi:transmission-tower-import",
+  [SEGMENT_ENTITY_MAP.battery_output.primary]: "mdi:power-socket-de",
+  [SEGMENT_ENTITY_MAP.grid_export.primary]: "mdi:transmission-tower-export",
 };
 
 export function collectRelevantEntities(config) {
@@ -16,41 +23,25 @@ export function collectRelevantEntities(config) {
     .filter((entityId) => typeof entityId === "string" && entityId.length > 0);
 }
 
-export function computeEntitySignature(hass, entityIds) {
-  return entityIds
-    .map((entityId) => {
-      const state = hass?.states?.[entityId];
-      if (!state) {
-        return `${entityId}:missing`;
-      }
-      const unit = state.attributes?.unit_of_measurement ?? "";
-      return `${entityId}:${state.state}:${unit}`;
-    })
-    .join("|");
-}
-
 export function buildCardModel(config, hass) {
   const entities = config?.entities || {};
-  const decimals = config?.decimals || {};
   const model = {};
 
   SEGMENT_IDS.forEach((segmentId, index) => {
-    const segmentIndex = index + 1;
     const segmentDef = SEGMENT_ENTITY_MAP[segmentId];
+    const fallbackLabel = SEGMENT_LABELS[segmentId] || `Segment ${index + 1}`;
     model[segmentId] = {
       primary: buildMetricView(
         hass,
         entities[segmentDef.primary],
         segmentDef.primary,
-        decimals.primary,
-        `Segment ${segmentIndex}`,
+        fallbackLabel,
       ),
       chips: segmentDef.secondaries.map((secondaryKey, chipIndex) => buildMetricView(
         hass,
         entities[secondaryKey],
         "secondary",
-        decimals.secondary,
-        `Segment ${segmentIndex} detail ${chipIndex + 1}`,
+        `${fallbackLabel} detail ${chipIndex + 1}`,
       )),
     };
   });
@@ -58,20 +49,31 @@ export function buildCardModel(config, hass) {
   return model;
 }
 
-function buildMetricView(hass, entityId, kind, decimals, fallbackLabel) {
+function buildMetricView(hass, entityId, kind, fallbackLabel) {
   const stateObj = entityId ? hass?.states?.[entityId] : null;
+  const status = resolveEntityStatus(entityId, stateObj);
   const friendlyName = stateObj?.attributes?.friendly_name || fallbackLabel;
-  const value = formatMetricValue(stateObj, decimals);
-  const rawState = `${stateObj?.state ?? ""}`.trim();
-  const available = Boolean(entityId && stateObj && !isUnavailable(rawState));
+  const value = formatMetricValue(hass, stateObj);
 
   return {
-    entityId: entityId || "",
+    entityId: status === "ready" ? entityId || "" : "",
     icon: resolveMetricIcon(stateObj, kind),
     value,
-    title: entityId ? `${friendlyName}: ${value}` : fallbackLabel,
-    available,
+    title: buildMetricTitle(friendlyName, fallbackLabel, value, status),
+    available: status === "ready",
+    configured: status !== "omitted",
+    status,
   };
+}
+
+function buildMetricTitle(friendlyName, fallbackLabel, value, status) {
+  if (status === "ready") {
+    return `${friendlyName}: ${value}`;
+  }
+  if (status === "omitted") {
+    return fallbackLabel;
+  }
+  return `${friendlyName}: unavailable`;
 }
 
 function resolveMetricIcon(stateObj, kind) {
@@ -82,61 +84,6 @@ function resolveMetricIcon(stateObj, kind) {
   return DEFAULT_METRIC_ICONS[kind] || "";
 }
 
-function formatMetricValue(stateObj, decimals) {
-  if (!stateObj) {
-    return "—";
-  }
-
-  const raw = `${stateObj.state ?? ""}`.trim();
-  if (isUnavailable(raw)) {
-    return "—";
-  }
-
-  const numeric = parseNumericState(raw);
-  if (numeric === null) {
-    return raw;
-  }
-
-  const unit = `${stateObj.attributes?.unit_of_measurement ?? ""}`.trim();
-  const suffix = unit ? ` ${unit}` : "";
-  return `${formatNumber(numeric, decimals)}${suffix}`;
-}
-
-function parseNumericState(raw) {
-  const trimmed = `${raw ?? ""}`.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const direct = Number(trimmed);
-  if (Number.isFinite(direct)) {
-    return direct;
-  }
-
-  const normalized = trimmed.replace(",", ".");
-  const match = normalized.match(/^-?\d+(?:\.\d+)?/);
-  if (!match) {
-    return null;
-  }
-
-  const parsed = Number(match[0]);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function formatNumber(value, decimals) {
-  const precision = Number.isInteger(Number(decimals)) ? Number(decimals) : 0;
-  const key = `${precision}`;
-  let formatter = formatterCache.get(key);
-  if (!formatter) {
-    formatter = new Intl.NumberFormat(undefined, {
-      minimumFractionDigits: precision,
-      maximumFractionDigits: precision,
-    });
-    formatterCache.set(key, formatter);
-  }
-  return formatter.format(value);
-}
-
-function isUnavailable(raw) {
-  return UNAVAILABLE_STATES.has(`${raw ?? ""}`.trim().toLowerCase());
+function formatMetricValue(hass, stateObj) {
+  return formatEntityStateValue(hass, stateObj);
 }

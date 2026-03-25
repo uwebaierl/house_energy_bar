@@ -1,9 +1,33 @@
-import { buildCardModel, collectRelevantEntities, computeEntitySignature } from "./house-energy-model.js";
+import { buildCardModel, collectRelevantEntities } from "./house-energy-model.js";
+import {
+  createRemovePathsCleanup,
+  emitConfigChanged,
+  flushConfigCleanup,
+  queueConfigCleanup,
+  runConfigCleanup,
+} from "./_shared/config-cleanup.js";
+import {
+  blendHex,
+  buildSegmentBackground,
+  normalizeHexColor,
+  pickBestTextColor,
+} from "./_shared/color.js";
+import {
+  getColorPresetOptions,
+  normalizeColorPresetName,
+} from "./_shared/color-presets.js";
+import { openMoreInfo } from "./_shared/interaction.js";
+import { clamp } from "./_shared/math.js";
+import { computeEntitySignature } from "./_shared/signature.js";
 import {
   CARD_ELEMENT_TAG,
   CARD_NAME,
+  CARD_TYPE,
   DEFAULT_CONFIG,
+  PV_SEGMENT_ID,
   SEGMENT_ENTITY_MAP,
+  SEGMENT_LABELS,
+  SEGMENT_COLOR_TOKENS,
   SEGMENT_IDS,
 } from "./constants.js";
 import { normalizeConfig, validateConfig } from "./validate.js";
@@ -13,14 +37,21 @@ const COLOR_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const COLOR_TRANSITION = `260ms ${COLOR_EASING}`;
 const PRIMARY_SETTLE_DURATION_MS = 220;
 const EDITOR_ELEMENT_TAG = "house-energy-bar-editor";
+const CONFIG_CLEANUP_STEPS = [
+  createRemovePathsCleanup(["segment_tokens"]),
+  migrateLegacyHouseEnergyColors,
+];
+const EDITOR_CLEANUP_STEPS = [
+  createRemovePathsCleanup(["decimals", "segment_tokens"]),
+  migrateLegacyHouseEnergyColors,
+];
 const SEGMENT_DEFS = SEGMENT_IDS.map((segmentId, index) => ({
   id: segmentId,
   number: index + 1,
-  label: `Segment ${index + 1}`,
+  label: SEGMENT_LABELS[segmentId] || `Segment ${index + 1}`,
   primaryKey: SEGMENT_ENTITY_MAP[segmentId].primary,
   secondaryKeys: SEGMENT_ENTITY_MAP[segmentId].secondaries,
 }));
-
 export class HouseEnergyBarCard extends HTMLElement {
   constructor() {
     super();
@@ -61,7 +92,8 @@ export class HouseEnergyBarCard extends HTMLElement {
   }
 
   setConfig(config) {
-    const normalized = normalizeConfig(config);
+    const cleanup = runConfigCleanup(config, CONFIG_CLEANUP_STEPS);
+    const normalized = normalizeConfig(cleanup.config);
     validateConfig(normalized);
     this._config = normalized;
     this._lastSignature = "";
@@ -131,14 +163,28 @@ export class HouseEnergyBarCard extends HTMLElement {
   }
 
   _renderModel() {
-    const model = buildCardModel(this._config || DEFAULT_CONFIG, this._hass);
+    const config = this._config || DEFAULT_CONFIG;
+    const model = buildCardModel(config, this._hass);
+    const visibleSegments = getVisibleSegmentDefs(config, model);
+    const firstVisibleId = visibleSegments[0]?.id || "";
+    const visibleIds = new Set(visibleSegments.map((segment) => segment.id));
 
-    this.style.setProperty("--bb-columns", "minmax(0, 1.12fr) minmax(0, 1fr) minmax(0, 1fr)");
+    this.style.setProperty("--bb-columns", resolveColumnsTemplate(visibleSegments.length));
 
     SEGMENT_DEFS.forEach((segment) => {
       const segmentRefs = this._refs?.segments?.[segment.id];
       const segmentModel = model[segment.id];
       if (!segmentRefs || !segmentModel) {
+        return;
+      }
+
+      const isVisible = visibleIds.has(segment.id);
+      if (segmentRefs.section) {
+        segmentRefs.section.hidden = !isVisible;
+        segmentRefs.section.classList.toggle("section--first-visible", isVisible && segment.id === firstVisibleId);
+        segmentRefs.section.classList.toggle("section--lead", isVisible && segment.id === firstVisibleId);
+      }
+      if (!isVisible) {
         return;
       }
 
@@ -148,45 +194,59 @@ export class HouseEnergyBarCard extends HTMLElement {
       });
       syncChipRowVisibility(segmentRefs.chipRow, ...segmentRefs.secondaries);
     });
+
+    this._applySectionBackgrounds(config.colors || DEFAULT_CONFIG.colors, config.track_blend, config.fade_between_segments, visibleSegments);
   }
 
   _applyTheme() {
     const config = this._config || DEFAULT_CONFIG;
     const colors = config.colors || DEFAULT_CONFIG.colors;
+    const trackTextColor = pickBestTextColor(colors.track, colors.text_light, colors.text_dark);
 
     this.style.setProperty("--bb-bar-height", `${config.bar_height}px`);
     this.style.setProperty("--bb-radius", `${config.corner_radius}px`);
     this.style.setProperty("--bb-card-bg", config.background_transparent ? "transparent" : colors.background);
     this.style.setProperty("--bb-track-bg", colors.track);
-    this.style.setProperty("--bb-text", colors.text);
+    this.style.setProperty("--bb-text", trackTextColor);
     this.style.setProperty("--bb-line-gap", `${FIXED_LINE_GAP_PX}px`);
     this.style.setProperty("--bb-primary-font-segment1", "17px");
     this.style.setProperty("--bb-primary-font-segment", "17px");
     this.style.setProperty("--bb-chip-font", "12px");
     this.style.setProperty("--bb-divider", colors.divider);
     this.style.setProperty("--bb-divider-opacity", config.show_divider ? "1" : "0");
-    this._applySectionBackgrounds(colors, config.track_blend);
   }
 
-  _applySectionBackgrounds(colors, trackBlend) {
+  _applySectionBackgrounds(colors, trackBlend, fadeBetweenSegments, visibleSegments) {
     const trackColor = normalizeHexColor(colors.track, DEFAULT_CONFIG.colors.track);
-    const blendAmount = clamp(0.15, Number(trackBlend) || DEFAULT_CONFIG.track_blend, 0.3);
-    const blendedColors = SEGMENT_DEFS.map((segment) => {
-      const segmentColor = normalizeHexColor(colors[segment.id], trackColor);
+    const blendAmount = clamp(0.1, Number(trackBlend) || DEFAULT_CONFIG.track_blend, 0.4);
+    const activeSegments = Array.isArray(visibleSegments) && visibleSegments.length > 0
+      ? visibleSegments
+      : getVisibleSegmentDefs(this._config || DEFAULT_CONFIG, null);
+    const blendedColors = activeSegments.map((segment) => {
+      const tokenKey = SEGMENT_COLOR_TOKENS[segment.id];
+      const segmentColor = normalizeHexColor(colors[tokenKey], trackColor);
       return blendHex(trackColor, segmentColor, blendAmount);
     });
 
-    SEGMENT_DEFS.forEach((segment, index) => {
+    SEGMENT_DEFS.forEach((segment) => {
       const section = this._refs?.segments?.[segment.id]?.section;
       if (!section) {
         return;
       }
-      const gradient = buildSmoothSegmentGradient(
-        blendedColors[index],
-        index > 0 ? blendedColors[index - 1] : null,
-        index < (blendedColors.length - 1) ? blendedColors[index + 1] : null,
+      const visibleIndex = activeSegments.findIndex((entry) => entry.id === segment.id);
+      if (visibleIndex === -1) {
+        section.style.background = "";
+        section.style.color = "";
+        return;
+      }
+      const background = buildSegmentBackground(
+        blendedColors[visibleIndex],
+        visibleIndex > 0 ? blendedColors[visibleIndex - 1] : null,
+        visibleIndex < (blendedColors.length - 1) ? blendedColors[visibleIndex + 1] : null,
+        fadeBetweenSegments,
       );
-      section.style.background = gradient;
+      section.style.background = background;
+      section.style.color = pickBestTextColor(blendedColors[visibleIndex], colors.text_light, colors.text_dark);
     });
   }
 
@@ -203,17 +263,7 @@ export class HouseEnergyBarCard extends HTMLElement {
 
     event.preventDefault();
     event.stopPropagation();
-    if (typeof this._hass?.moreInfo === "function") {
-      this._hass.moreInfo(entityId);
-      return;
-    }
-
-    const moreInfo = new Event("hass-more-info", {
-      bubbles: true,
-      composed: true,
-    });
-    moreInfo.detail = { entityId };
-    this.dispatchEvent(moreInfo);
+    openMoreInfo(this, this._hass, entityId);
   }
 }
 
@@ -222,35 +272,43 @@ class HouseEnergyBarEditor extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this._config = null;
+    this._rawConfig = null;
     this._hass = null;
     this._form = null;
-    this._onValueChanged = (event) => this._handleValueChanged(event);
+    this._cleanupState = {
+      pendingKey: "",
+      lastAppliedKey: "",
+    };
+    this._onFormValueChanged = (event) => this._handleFormValueChanged(event);
   }
 
   setConfig(config) {
     const incoming = config && typeof config === "object" ? config : {};
-    this._config = normalizeConfig({
-      ...incoming,
-      type: incoming.type || CARD_TYPE,
-    });
+    const cleanup = runConfigCleanup(incoming, EDITOR_CLEANUP_STEPS);
+    this._rawConfig = {
+      ...cleanup.config,
+      type: cleanup.config.type || incoming.type || CARD_TYPE,
+    };
+    this._rawConfig.color_preset = normalizeColorPresetName(this._rawConfig.color_preset);
+    this._config = normalizeConfig(this._rawConfig);
     this._render();
+    if (cleanup.changed) {
+      queueConfigCleanup(this, this._rawConfig, this._cleanupState);
+    }
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (this._form) {
-      this._form.hass = hass;
-    }
+    syncEditorFormsHass([this._form], hass);
   }
 
   connectedCallback() {
     this._render();
+    flushConfigCleanup(this, this._cleanupState);
   }
 
   disconnectedCallback() {
-    if (this._form) {
-      this._form.removeEventListener("value-changed", this._onValueChanged);
-    }
+    this._form?.removeEventListener("value-changed", this._onFormValueChanged);
   }
 
   _render() {
@@ -259,43 +317,79 @@ class HouseEnergyBarEditor extends HTMLElement {
     }
 
     if (!this._form) {
-      this.shadowRoot.innerHTML = "<ha-form></ha-form>";
-      this._form = this.shadowRoot.querySelector("ha-form");
-      this._form?.addEventListener("value-changed", this._onValueChanged);
+      this.shadowRoot.innerHTML = `
+        <div class="editor-shell">
+          <ha-form class="editor-form"></ha-form>
+        </div>
+        ${editorStyles()}
+      `;
+      this._form = this.shadowRoot.querySelector(".editor-form");
+      this._form?.addEventListener("value-changed", this._onFormValueChanged);
     }
 
     if (!this._form) {
       return;
     }
 
+    const config = this._config || normalizeConfig(HouseEnergyBarCard.getStubConfig());
     this._form.hass = this._hass;
-    this._form.schema = buildConfigFormSchema();
-    this._form.data = this._config || normalizeConfig(HouseEnergyBarCard.getStubConfig());
+    this._form.schema = buildEditorFormSchema(this._rawConfig);
+    this._form.data = buildHouseEditorFormData(config, this._rawConfig);
     this._form.computeLabel = (schema) => schema.label || schema.name || "";
   }
 
-  _handleValueChanged(event) {
+  _handleFormValueChanged(event) {
     event.stopPropagation();
     const value = event?.detail?.value;
     if (!value || typeof value !== "object") {
       return;
     }
 
-    this._config = normalizeConfig({
-      ...(this._config || {}),
+    const useOverrides = value.use_color_overrides === true;
+    const hadOverrides = hasColorOverrides(this._rawConfig);
+    const nextRaw = {
+      ...(this._rawConfig || {}),
       ...value,
       type: CARD_TYPE,
-    });
-
-    if (this._form) {
-      this._form.data = this._config;
+      color_preset: normalizeColorPresetName(value.color_preset ?? this._rawConfig?.color_preset),
+    };
+    delete nextRaw.use_color_overrides;
+    if (value.fade_between_segments === true) {
+      nextRaw.fade_between_segments = true;
+    } else {
+      delete nextRaw.fade_between_segments;
+    }
+    if (value.show_solar_segment === true) {
+      nextRaw.show_solar_segment = true;
+    } else {
+      delete nextRaw.show_solar_segment;
     }
 
-    this.dispatchEvent(new CustomEvent("config-changed", {
-      detail: { config: this._config },
-      bubbles: true,
-      composed: true,
-    }));
+    if (useOverrides) {
+      nextRaw.colors = {
+        ...resolveEditorBackgroundColor(value.colors, this._rawConfig?.colors),
+        ...pickHouseColorOverrides(this._config?.colors || DEFAULT_CONFIG.colors),
+        ...(hadOverrides ? pickHouseEditorColorOverrides(value.colors) : {}),
+      };
+      nextRaw.track_blend = normalizeTrackBlendOverrideValue(
+        value.track_blend,
+        this._config?.track_blend ?? DEFAULT_CONFIG.track_blend,
+      );
+    } else {
+      nextRaw.colors = {
+        ...resolveEditorBackgroundColor(value.colors, this._rawConfig?.colors),
+      };
+      delete nextRaw.track_blend;
+      if (Object.keys(nextRaw.colors).length === 0) {
+        delete nextRaw.colors;
+      }
+    }
+
+    this._rawConfig = nextRaw;
+    this._config = normalizeConfig(this._rawConfig);
+
+    this._render();
+    emitConfigChanged(this, this._rawConfig);
   }
 }
 
@@ -316,7 +410,7 @@ function applyMetric(button, metric, options = {}) {
   button.disabled = !metric?.available;
   button.title = metric?.title || "";
   button.setAttribute("aria-label", metric?.title || "Energy metric");
-  button.hidden = Boolean(options.hideWhenUnavailable && !metric?.available);
+  button.hidden = Boolean(options.hideWhenUnavailable && !metric?.configured);
 
   const iconEl = button.querySelector(".metric-icon");
   if (iconEl) {
@@ -344,9 +438,8 @@ function syncChipRowVisibility(row, ...buttons) {
 }
 
 function buildSegmentSectionMarkup(segment) {
-  const sectionClass = segment.number === 1 ? "section section--segment1" : "section section--segment";
   return `
-    <section class="${sectionClass}" aria-label="${segment.label}" data-segment="${segment.id}">
+    <section class="section section--segment" aria-label="${segment.label}" data-segment="${segment.id}">
       <div class="primary-row">
         ${buildMetricButton(`${segment.id}-primary`, true)}
       </div>
@@ -455,6 +548,10 @@ function styles() {
         transition: background ${COLOR_TRANSITION};
       }
 
+      .section[hidden] {
+        display: none !important;
+      }
+
       .section + .section::before {
         content: "";
         position: absolute;
@@ -466,7 +563,11 @@ function styles() {
         opacity: var(--bb-divider-opacity);
       }
 
-      .section--segment1 {
+      .section--first-visible::before {
+        content: none;
+      }
+
+      .section--lead {
         align-items: center;
         text-align: center;
       }
@@ -499,7 +600,7 @@ function styles() {
         margin: 0;
         border: 0;
         background: transparent;
-        color: var(--bb-text);
+        color: inherit;
         font: inherit;
         cursor: pointer;
         -webkit-tap-highlight-color: transparent;
@@ -550,7 +651,7 @@ function styles() {
         color: color-mix(in srgb, currentColor 88%, transparent);
       }
 
-      .section--segment1 .metric-icon--primary {
+      .section--lead .metric-icon--primary {
         width: calc(var(--bb-primary-font-segment1) * 0.92);
         height: calc(var(--bb-primary-font-segment1) * 0.92);
         --mdc-icon-size: calc(var(--bb-primary-font-segment1) * 0.92);
@@ -577,7 +678,7 @@ function styles() {
         letter-spacing: -0.02em;
       }
 
-      .section--segment1 .metric-button--primary .metric-text {
+      .section--lead .metric-button--primary .metric-text {
         font-size: var(--bb-primary-font-segment1);
       }
 
@@ -617,70 +718,17 @@ export function registerCard() {
   registerCustomCardMetadata(
     CARD_ELEMENT_TAG,
     CARD_NAME,
-    "House Energy Bar: compact three-segment metric overview for Home Assistant.",
+    "House Energy Bar: compact metric overview with an optional solar lead segment for Home Assistant.",
   );
 }
 
-function buildSmoothSegmentGradient(centerColor, prevColor, nextColor) {
-  const leftBoundary = prevColor ? mixHex(prevColor, centerColor, 0.5) : centerColor;
-  const rightBoundary = nextColor ? mixHex(centerColor, nextColor, 0.5) : centerColor;
-  return `linear-gradient(90deg, ${leftBoundary} 0%, ${centerColor} 30%, ${centerColor} 70%, ${rightBoundary} 100%)`;
-}
-
-function blendHex(baseHex, accentHex, blendAmount) {
-  const base = parseHex(baseHex);
-  const accent = parseHex(accentHex);
-
-  const blend = clamp(0, blendAmount, 1);
-  const keep = 1 - blend;
-
-  const r = Math.round((base.r * blend) + (accent.r * keep));
-  const g = Math.round((base.g * blend) + (accent.g * keep));
-  const b = Math.round((base.b * blend) + (accent.b * keep));
-
-  return toHex({ r, g, b });
-}
-
-function mixHex(aHex, bHex, ratio) {
-  const a = parseHex(aHex);
-  const b = parseHex(bHex);
-  const t = clamp(0, Number(ratio) || 0, 1);
-  return toHex({
-    r: (a.r * (1 - t)) + (b.r * t),
-    g: (a.g * (1 - t)) + (b.g * t),
-    b: (a.b * (1 - t)) + (b.b * t),
-  });
-}
-
-function parseHex(hex) {
-  const cleaned = String(hex || "").trim();
-  const value = /^#[0-9A-Fa-f]{6}$/.test(cleaned) ? cleaned.slice(1) : "000000";
-  return {
-    r: parseInt(value.slice(0, 2), 16),
-    g: parseInt(value.slice(2, 4), 16),
-    b: parseInt(value.slice(4, 6), 16),
-  };
-}
-
-function toHex(rgb) {
-  const r = clamp(0, Math.round(rgb.r), 255).toString(16).padStart(2, "0");
-  const g = clamp(0, Math.round(rgb.g), 255).toString(16).padStart(2, "0");
-  const b = clamp(0, Math.round(rgb.b), 255).toString(16).padStart(2, "0");
-  return `#${r}${g}${b}`;
-}
-
-function clamp(min, value, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function buildConfigFormSchema() {
-  const entitySelector = { entity: { domain: ["sensor", "input_number"] } };
+function buildTopFormSchema() {
   const colorSelector = { text: {} };
 
   return [
     {
       type: "expandable",
-      title: "Layout & Styling",
+      title: "Layout & Motion",
       schema: [
         {
           name: "bar_height",
@@ -695,61 +743,316 @@ function buildConfigFormSchema() {
           selector: { number: { min: 0, max: 30, step: 1, mode: "slider" } },
         },
         {
-          name: "track_blend",
-          label: "Track/segment color blend (0.15-0.30)",
-          required: true,
-          selector: { number: { min: 0.15, max: 0.3, step: 0.01, mode: "slider" } },
+          type: "grid",
+          name: "colors",
+          schema: [
+            { name: "background", label: "Card background color", required: false, selector: colorSelector },
+          ],
         },
         { name: "background_transparent", label: "Use transparent card background", selector: { boolean: {} } },
         { name: "show_divider", label: "Show separators between segments", selector: { boolean: {} } },
       ],
     },
-    {
-      type: "expandable",
-      title: "Colors",
-      name: "colors",
-      schema: [
-        { name: "background", label: "Card background color", required: true, selector: colorSelector },
-        { name: "track", label: "Base track color", required: true, selector: colorSelector },
-        { name: "segment1", label: "Color for segment 1", required: true, selector: colorSelector },
-        { name: "segment2", label: "Color for segment 2", required: true, selector: colorSelector },
-        { name: "segment3", label: "Color for segment 3", required: true, selector: colorSelector },
-        { name: "text", label: "Text and icon color", required: true, selector: colorSelector },
-        { name: "divider", label: "Divider line color", required: true, selector: colorSelector },
-      ],
-    },
-    {
-      type: "expandable",
-      title: "Decimals",
-      name: "decimals",
-      schema: [
-        { name: "primary", label: "Top row value decimals", required: true, selector: { number: { min: 0, max: 2, step: 1, mode: "box" } } },
-        { name: "secondary", label: "Second row value decimals", required: true, selector: { number: { min: 0, max: 2, step: 1, mode: "box" } } },
-      ],
-    },
+  ];
+}
+
+function buildBottomFormSchema(showSolarSegment) {
+  const entitySelector = { entity: { domain: ["sensor", "input_number"] } };
+  const entitySchema = [];
+
+  if (showSolarSegment) {
+    entitySchema.push(
+      { name: "pv_primary", label: "PV top row entity", selector: entitySelector },
+      { name: "pv_secondary_1", label: "PV second row entity 1", selector: entitySelector },
+      { name: "pv_secondary_2", label: "PV second row entity 2", selector: entitySelector },
+    );
+  }
+
+  entitySchema.push(
+    { name: "grid_import_primary", label: "Grid import top row entity", required: true, selector: entitySelector },
+    { name: "grid_import_secondary_1", label: "Grid import second row entity 1", selector: entitySelector },
+    { name: "grid_import_secondary_2", label: "Grid import second row entity 2", selector: entitySelector },
+    { name: "battery_output_primary", label: "Battery output top row entity", required: true, selector: entitySelector },
+    { name: "battery_output_secondary_1", label: "Battery output second row entity 1", selector: entitySelector },
+    { name: "battery_output_secondary_2", label: "Battery output second row entity 2", selector: entitySelector },
+    { name: "grid_export_primary", label: "Grid export top row entity", required: true, selector: entitySelector },
+    { name: "grid_export_secondary_1", label: "Grid export second row entity 1", selector: entitySelector },
+    { name: "grid_export_secondary_2", label: "Grid export second row entity 2", selector: entitySelector },
+  );
+
+  return [
     {
       type: "expandable",
       title: "Entities",
-      name: "entities",
       schema: [
-        { name: "segment1_primary", label: "Segment 1 top row entity", required: true, selector: entitySelector },
-        { name: "segment1_secondary_1", label: "Segment 1 second row entity 1", selector: entitySelector },
-        { name: "segment1_secondary_2", label: "Segment 1 second row entity 2", selector: entitySelector },
-        { name: "segment2_primary", label: "Segment 2 top row entity", required: true, selector: entitySelector },
-        { name: "segment2_secondary_1", label: "Segment 2 second row entity 1", selector: entitySelector },
-        { name: "segment2_secondary_2", label: "Segment 2 second row entity 2", selector: entitySelector },
-        { name: "segment3_primary", label: "Segment 3 top row entity", required: true, selector: entitySelector },
-        { name: "segment3_secondary_1", label: "Segment 3 second row entity 1", selector: entitySelector },
-        { name: "segment3_secondary_2", label: "Segment 3 second row entity 2", selector: entitySelector },
+        { name: "show_solar_segment", label: "Show solar segment", selector: { boolean: {} } },
+        {
+          type: "grid",
+          name: "entities",
+          column_min_width: "100%",
+          schema: entitySchema,
+        },
       ],
     },
   ];
 }
 
-function normalizeHexColor(value, fallback) {
-  const raw = String(value ?? "").trim();
-  if (/^#[0-9A-Fa-f]{6}$/.test(raw)) {
-    return raw.toUpperCase();
+function buildColorOverridesGridSchema() {
+  const colorSelector = { text: {} };
+
+  return [
+    { name: "track", label: "Base track color", required: false, selector: colorSelector },
+    { name: "text_light", label: "Light text and icon color", required: false, selector: colorSelector },
+    { name: "text_dark", label: "Dark text and icon color", required: false, selector: colorSelector },
+    { name: "divider", label: "Divider line color", required: false, selector: colorSelector },
+    { name: "energy_source", label: "PV color", required: false, selector: colorSelector },
+    { name: "energy_storage_supply", label: "Battery output color", required: false, selector: colorSelector },
+    { name: "grid_import", label: "Grid import color", required: false, selector: colorSelector },
+    { name: "grid_export", label: "Grid export color", required: false, selector: colorSelector },
+  ];
+}
+
+function buildColorSectionSchema(showOverrides) {
+  const schema = [
+    {
+      name: "color_preset",
+      label: "Color preset",
+      required: false,
+      selector: {
+        select: {
+          mode: "dropdown",
+          options: getColorPresetOptions(),
+        },
+      },
+    },
+    {
+      name: "use_color_overrides",
+      label: "Use custom color overrides",
+      required: false,
+      selector: { boolean: {} },
+    },
+    {
+      name: "fade_between_segments",
+      label: "Fade between neighboring segments",
+      required: false,
+      selector: { boolean: {} },
+    },
+  ];
+
+  if (showOverrides) {
+    schema.push({
+      name: "track_blend",
+      label: "Track blend",
+      required: false,
+      selector: { number: { min: 0.1, max: 0.4, step: 0.01, mode: "slider" } },
+    });
+    schema.push({
+      type: "grid",
+      name: "colors",
+      schema: buildColorOverridesGridSchema(),
+    });
   }
-  return String(fallback || "#000000").toUpperCase();
+
+  return [
+    {
+      type: "expandable",
+      title: "Colors",
+      schema,
+    },
+  ];
+}
+
+function buildEditorFormSchema(rawConfig) {
+  return [
+    ...buildTopFormSchema(),
+    ...buildColorSectionSchema(hasColorOverrides(rawConfig)),
+    ...buildBottomFormSchema(rawConfig?.show_solar_segment === true),
+  ];
+}
+
+function buildHouseEditorFormData(config, rawConfig) {
+  return {
+    ...config,
+    use_color_overrides: hasColorOverrides(rawConfig),
+    track_blend: resolveEditorTrackBlend(rawConfig, config.track_blend),
+    colors: {
+      ...pickBackgroundColor(rawConfig?.colors),
+      ...pickHouseEditorColorOverrides(rawConfig?.colors),
+    },
+  };
+}
+
+function buildTopFormData(config) {
+  return {
+    bar_height: config.bar_height,
+    corner_radius: config.corner_radius,
+    show_solar_segment: config.show_solar_segment,
+    background_transparent: config.background_transparent,
+    show_divider: config.show_divider,
+    colors: pickBackgroundColor(config?.colors),
+  };
+}
+
+function hasColorOverrides(config) {
+  const colors = config?.colors;
+  const hasTokenOverrides = Boolean(colors)
+    && typeof colors === "object"
+    && Object.entries(colors).some(
+      ([key, value]) => key !== "background" && typeof value === "string" && value.trim().length > 0,
+    );
+  const trackBlend = Number(config?.track_blend);
+  return hasTokenOverrides || Number.isFinite(trackBlend);
+}
+
+function editorStyles() {
+  return `
+    <style>
+      .editor-shell {
+        display: grid;
+        gap: 12px;
+      }
+    </style>
+  `;
+}
+
+function syncEditorFormsHass(forms, hass) {
+  for (const form of forms) {
+    if (form) {
+      form.hass = hass;
+    }
+  }
+}
+
+function pickHouseColorOverrides(colors) {
+  const source = colors && typeof colors === "object" ? colors : {};
+  return {
+    track: source.track || DEFAULT_CONFIG.colors.track,
+    text_light: source.text_light || source.text || DEFAULT_CONFIG.colors.text_light,
+    text_dark: source.text_dark || source.text || DEFAULT_CONFIG.colors.text_dark,
+    divider: source.divider || DEFAULT_CONFIG.colors.divider,
+    energy_source: source.energy_source || DEFAULT_CONFIG.colors.energy_source,
+    energy_storage_supply: source.energy_storage_supply || DEFAULT_CONFIG.colors.energy_storage_supply,
+    grid_import: source.grid_import || DEFAULT_CONFIG.colors.grid_import,
+    grid_export: source.grid_export || DEFAULT_CONFIG.colors.grid_export,
+  };
+}
+
+function pickHouseEditorColorOverrides(colors) {
+  const source = colors && typeof colors === "object" ? colors : {};
+  return {
+    track: source.track || "",
+    text_light: source.text_light || source.text || "",
+    text_dark: source.text_dark || source.text || "",
+    divider: source.divider || "",
+    energy_source: source.energy_source || "",
+    energy_storage_supply: source.energy_storage_supply || "",
+    grid_import: source.grid_import || "",
+    grid_export: source.grid_export || "",
+  };
+}
+
+function pickBackgroundColor(colors) {
+  if (!colors || typeof colors !== "object" || typeof colors.background !== "string" || colors.background.trim().length === 0) {
+    return {};
+  }
+  const background = colors.background.trim();
+  if (background.toUpperCase() === DEFAULT_CONFIG.colors.background) {
+    return {};
+  }
+  return { background };
+}
+
+function resolveEditorBackgroundColor(formColors, fallbackColors) {
+  if (formColors && typeof formColors === "object" && Object.prototype.hasOwnProperty.call(formColors, "background")) {
+    return pickBackgroundColor(formColors);
+  }
+  return pickBackgroundColor(fallbackColors);
+}
+
+function resolveEditorTrackBlend(rawConfig, fallback) {
+  const trackBlend = Number(rawConfig?.track_blend);
+  if (!Number.isFinite(trackBlend)) {
+    return fallback;
+  }
+  return Math.min(0.4, Math.max(0.1, trackBlend));
+}
+
+function normalizeTrackBlendOverrideValue(value, fallback) {
+  const trackBlend = Number(value);
+  if (!Number.isFinite(trackBlend)) {
+    return fallback;
+  }
+  return Math.min(0.4, Math.max(0.1, trackBlend));
+}
+
+function migrateLegacyHouseEnergyColors(config) {
+  if (!config || typeof config !== "object" || !config.colors || typeof config.colors !== "object") {
+    return config;
+  }
+
+  const colors = config.colors;
+  const nextColors = {
+    ...colors,
+  };
+  let changed = false;
+
+  changed = moveLegacyHouseColor(nextColors, "segment1", "grid_import") || changed;
+  changed = moveLegacyHouseColor(nextColors, "segment2", "energy_storage_supply") || changed;
+  changed = moveLegacyHouseColor(nextColors, "segment3", "grid_export") || changed;
+  if (!nextColors.text_light && typeof colors.text === "string") {
+    nextColors.text_light = colors.text;
+    changed = true;
+  }
+  if (!nextColors.text_dark && typeof colors.text === "string") {
+    nextColors.text_dark = colors.text;
+    changed = true;
+  }
+  if ("text" in nextColors) {
+    delete nextColors.text;
+    changed = true;
+  }
+
+  if (!changed) {
+    return config;
+  }
+
+  return {
+    ...config,
+    colors: nextColors,
+  };
+}
+
+function moveLegacyHouseColor(colors, legacyKey, nextKey) {
+  let changed = false;
+
+  if (!colors[nextKey] && typeof colors[legacyKey] === "string") {
+    colors[nextKey] = colors[legacyKey];
+    changed = true;
+  }
+
+  if (legacyKey in colors) {
+    delete colors[legacyKey];
+    changed = true;
+  }
+
+  return changed;
+}
+
+function getVisibleSegmentDefs(config, model) {
+  return SEGMENT_DEFS.filter((segment) => {
+    if (segment.id !== PV_SEGMENT_ID) {
+      return true;
+    }
+    if (config?.show_solar_segment !== true) {
+      return false;
+    }
+    return Boolean(model?.[PV_SEGMENT_ID]?.primary?.configured);
+  });
+}
+
+function resolveColumnsTemplate(visibleCount) {
+  if (visibleCount >= 4) {
+    return "repeat(4, minmax(0, 1fr))";
+  }
+  return "minmax(0, 1.12fr) minmax(0, 1fr) minmax(0, 1fr)";
 }

@@ -1,11 +1,16 @@
 import {
   CARD_TYPE,
   COLOR_KEYS,
-  DECIMAL_KEYS,
   DEFAULT_CONFIG,
   OPTIONAL_ENTITY_KEYS,
   REQUIRED_ENTITY_KEYS,
 } from "./constants.js";
+import {
+  isKnownColorPreset,
+  mergeColorPresetTokens,
+  normalizeColorPresetName,
+  resolveColorPresetTrackBlend,
+} from "./_shared/color-presets.js";
 
 export function validateConfig(config) {
   if (!config || typeof config !== "object") {
@@ -18,7 +23,14 @@ export function validateConfig(config) {
 
   validateRange(config.bar_height, "bar_height", 24, 72);
   validateRange(config.corner_radius, "corner_radius", 0, 30);
-  validateRange(config.track_blend, "track_blend", 0.15, 0.3);
+  validateRange(config.track_blend, "track_blend", 0.1, 0.4);
+  validateColorPreset(config.color_preset);
+  if (typeof config.fade_between_segments !== "boolean") {
+    throw new Error("fade_between_segments must be true or false.");
+  }
+  if (typeof config.show_solar_segment !== "boolean") {
+    throw new Error("show_solar_segment must be true or false.");
+  }
   if (typeof config.background_transparent !== "boolean") {
     throw new Error("background_transparent must be true or false.");
   }
@@ -44,13 +56,6 @@ export function validateConfig(config) {
     }
   }
 
-  if (!config.decimals || typeof config.decimals !== "object") {
-    throw new Error("decimals must be an object.");
-  }
-  for (const key of DECIMAL_KEYS) {
-    validateIntegerRange(config.decimals[key], `decimals.${key}`, 0, 2);
-  }
-
   if (!config.colors || typeof config.colors !== "object") {
     throw new Error("colors must be an object.");
   }
@@ -60,19 +65,31 @@ export function validateConfig(config) {
       throw new Error(`colors.${key} must be a non-empty color string.`);
     }
   }
+
 }
 
 export function normalizeConfig(config) {
   const source = config && typeof config === "object" ? config : {};
   const entitiesInput = source.entities && typeof source.entities === "object" ? source.entities : {};
-  const decimalsInput = source.decimals && typeof source.decimals === "object" ? source.decimals : {};
   const colorsInput = source.colors && typeof source.colors === "object" ? source.colors : {};
 
   return {
     type: CARD_TYPE,
+    color_preset: normalizeColorPresetName(source.color_preset),
     bar_height: clampNumber(source.bar_height, 24, 72, DEFAULT_CONFIG.bar_height),
     corner_radius: clampNumber(source.corner_radius, 0, 30, DEFAULT_CONFIG.corner_radius),
-    track_blend: clampNumber(source.track_blend, 0.15, 0.3, DEFAULT_CONFIG.track_blend),
+    track_blend: clampNumber(
+      source.track_blend,
+      0.1,
+      0.4,
+      resolveColorPresetTrackBlend(source.color_preset, DEFAULT_CONFIG.track_blend),
+    ),
+    fade_between_segments: typeof source.fade_between_segments === "boolean"
+      ? source.fade_between_segments
+      : DEFAULT_CONFIG.fade_between_segments,
+    show_solar_segment: typeof source.show_solar_segment === "boolean"
+      ? source.show_solar_segment
+      : DEFAULT_CONFIG.show_solar_segment,
     background_transparent: typeof source.background_transparent === "boolean"
       ? source.background_transparent
       : DEFAULT_CONFIG.background_transparent,
@@ -80,17 +97,10 @@ export function normalizeConfig(config) {
       ? source.show_divider
       : DEFAULT_CONFIG.show_divider,
     entities: normalizeEntities(entitiesInput),
-    decimals: normalizeObjectByKeys(
-      DECIMAL_KEYS,
-      decimalsInput,
-      DEFAULT_CONFIG.decimals,
-      (value, fallback) => clampDecimal(value, fallback),
-    ),
-    colors: normalizeObjectByKeys(
-      COLOR_KEYS,
-      colorsInput,
+    colors: mergeColorPresetTokens(
+      source.color_preset,
       DEFAULT_CONFIG.colors,
-      (value, fallback) => normalizeColor(value, fallback),
+      normalizeColorOverrides(colorsInput),
     ),
   };
 }
@@ -102,27 +112,12 @@ function validateRange(value, key, min, max) {
   }
 }
 
-function validateIntegerRange(value, key, min, max) {
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < min || n > max) {
-    throw new Error(`${key} must be an integer between ${min} and ${max}.`);
-  }
-}
-
 function clampNumber(value, min, max, fallback) {
   const n = Number(value);
   if (!Number.isFinite(n)) {
     return fallback;
   }
   return Math.min(max, Math.max(min, n));
-}
-
-function clampDecimal(value, fallback) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return fallback;
-  }
-  return Math.min(2, Math.max(0, Math.round(n)));
 }
 
 function normalizeRequiredEntity(value, fallback) {
@@ -164,9 +159,34 @@ function normalizeEntities(entitiesInput) {
   return entities;
 }
 
-function normalizeObjectByKeys(keys, source, fallback, normalizeValue) {
-  return keys.reduce((result, key) => {
-    result[key] = normalizeValue(source[key], fallback[key]);
-    return result;
-  }, {});
+function validateColorPreset(value) {
+  if (value === undefined) {
+    return;
+  }
+  if (!isKnownColorPreset(value)) {
+    throw new Error("color_preset must be a supported preset name.");
+  }
+}
+
+function normalizeColorOverrides(colorsInput) {
+  return {
+    background: normalizeColor(colorsInput.background, null),
+    track: normalizeColor(colorsInput.track, null),
+    text_light: normalizeColor(colorsInput.text_light ?? colorsInput.text, null),
+    text_dark: normalizeColor(colorsInput.text_dark ?? colorsInput.text, null),
+    divider: normalizeColor(colorsInput.divider, null),
+    energy_source: normalizeColor(colorsInput.energy_source, null),
+    energy_storage_supply: normalizeColor(
+      colorsInput.energy_storage_supply ?? colorsInput.segment2,
+      null,
+    ),
+    grid_import: normalizeColor(
+      colorsInput.grid_import ?? colorsInput.segment1,
+      null,
+    ),
+    grid_export: normalizeColor(
+      colorsInput.grid_export ?? colorsInput.segment3,
+      null,
+    ),
+  };
 }
