@@ -6,16 +6,14 @@ House Energy Bar is a compact Home Assistant Lovelace card with 3 core semantic 
 
 ## Features
 
-- Fixed Grid Import, Battery Output, and Grid Export segments, plus an optional PV lead segment
-- Each segment supports 1 required primary metric and 2 optional secondary metrics
-- Secondary metrics are hidden when entity ids are empty or omitted
-- Configured metrics stay visible as `—` when their entity is missing or unavailable, while optional empty slots remain hidden
-- Nested YAML configuration with `entities` and semantic `colors`
-- Global semantic `color_preset` themes shared across all three cards
-- Uses Home Assistant's own localized entity formatting and entity-level display precision
-- Built-in visual editor for all supported options
-- The visual editor includes a dedicated Colors section in the same native Home Assistant expandable panel stack as the other editor sections, with a preset selector and an optional custom-color override toggle
-- Visual editor automatically removes legacy config keys it knows how to migrate
+- Compact daily totals card for grid import, battery output, and grid export, with an optional PV lead segment
+- Primary metric plus up to two secondary metrics per segment
+- Shared preset-based color themes with optional manual overrides
+- Built-in visual editor for layout, colors, and entities
+- Clickable values that open Home Assistant `more-info`
+- Missing or unavailable configured entities stay visible as `—`, while empty optional slots stay hidden
+- Uses Home Assistant's native localized state formatting
+- Adjustable height and corner radius for compact dashboard layouts
 - Adjustable height and corner radius to match [Bubble Card](https://github.com/Clooos/Bubble-Card) layouts cleanly
 
 ## Combined Setup
