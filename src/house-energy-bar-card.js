@@ -1,6 +1,5 @@
 import { buildCardModel, collectRelevantEntities } from "./house-energy-model.js";
 import {
-  createRemovePathsCleanup,
   emitConfigChanged,
   flushConfigCleanup,
   queueConfigCleanup,
@@ -16,6 +15,15 @@ import {
   getColorPresetOptions,
   normalizeColorPresetName,
 } from "./_shared/color-presets.js";
+import {
+  buildColorOverrideEditorState,
+  hasColorOverrides,
+  normalizeTrackBlendOverrideValue,
+  pickMappedStringValues,
+  registerCustomCardMetadata,
+  resolveEditorBackgroundColor,
+  syncEditorFormsHass,
+} from "./_shared/editor.js";
 import { openMoreInfo } from "./_shared/interaction.js";
 import { clamp } from "./_shared/math.js";
 import { computeEntitySignature } from "./_shared/signature.js";
@@ -25,26 +33,60 @@ import {
   CARD_TYPE,
   DEFAULT_CONFIG,
   PV_SEGMENT_ID,
+  REQUIRED_ENTITY_KEYS,
   SEGMENT_ENTITY_MAP,
   SEGMENT_LABELS,
   SEGMENT_COLOR_TOKENS,
   SEGMENT_IDS,
 } from "./constants.js";
+import {
+  HOUSE_CONFIG_CLEANUP_STEPS,
+  HOUSE_EDITOR_CLEANUP_STEPS,
+} from "./migrations.js";
 import { normalizeConfig, validateConfig } from "./validate.js";
+import {
+  buildBackgroundColorField,
+  buildColorTextSelector,
+  buildSliderNumberSelector,
+  EDITOR_SCHEMA_RANGE_BAR_HEIGHT,
+  EDITOR_SCHEMA_RANGE_CORNER_RADIUS,
+  EDITOR_SCHEMA_RANGE_TRACK_BLEND,
+} from "./_shared/editor-schema.js";
+import {
+  buildCardPreviewMarkup,
+  buildCardPreviewStyles,
+  hasRequiredEntityValues,
+  syncCardPreviewVisibility,
+} from "./_shared/preview.js";
+import {
+  applyEditorIncomingConfig,
+  commitEditorRawConfig,
+  createEditorCleanupState,
+  ensureSingleFormEditor,
+  renderSingleFormEditor,
+} from "./_shared/editor-controller.js";
+import {
+  applyMetricButtonState,
+  buildMetricButtonMarkup,
+  syncMetricButtonRowVisibility,
+} from "./_shared/metric-button.js";
 
 const FIXED_LINE_GAP_PX = 3;
 const COLOR_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const COLOR_TRANSITION = `260ms ${COLOR_EASING}`;
 const PRIMARY_SETTLE_DURATION_MS = 220;
 const EDITOR_ELEMENT_TAG = "house-energy-bar-editor";
-const CONFIG_CLEANUP_STEPS = [
-  createRemovePathsCleanup(["segment_tokens"]),
-  migrateLegacyHouseEnergyColors,
-];
-const EDITOR_CLEANUP_STEPS = [
-  createRemovePathsCleanup(["segment_tokens"]),
-  migrateLegacyHouseEnergyColors,
-];
+const CARD_DESCRIPTION = "House Energy Bar: compact home energy overview for Home Assistant.";
+const HOUSE_COLOR_FIELD_MAP = {
+  track: ["track"],
+  text_light: ["text_light", "text"],
+  text_dark: ["text_dark", "text"],
+  divider: ["divider"],
+  energy_source: ["energy_source"],
+  energy_storage_supply: ["energy_storage_supply"],
+  grid_import: ["grid_import"],
+  grid_export: ["grid_export"],
+};
 const SEGMENT_DEFS = SEGMENT_IDS.map((segmentId, index) => ({
   id: segmentId,
   number: index + 1,
@@ -61,6 +103,7 @@ export class HouseEnergyBarCard extends HTMLElement {
     this._rendered = false;
     this._lastSignature = "";
     this._refs = null;
+    this._showPreviewPlaceholder = false;
     this._onClick = (event) => this._handleClick(event);
   }
 
@@ -81,7 +124,9 @@ export class HouseEnergyBarCard extends HTMLElement {
     this._refs.shell.addEventListener("click", this._onClick);
     if (this._config) {
       this._applyTheme();
-      this._renderModel();
+      if (!this._showPreviewPlaceholder) {
+        this._renderModel();
+      }
     }
   }
 
@@ -92,20 +137,33 @@ export class HouseEnergyBarCard extends HTMLElement {
   }
 
   setConfig(config) {
-    const cleanup = runConfigCleanup(config, CONFIG_CLEANUP_STEPS);
+    const cleanup = runConfigCleanup(config, HOUSE_CONFIG_CLEANUP_STEPS);
+    const incomingType = cleanup.config?.type || config?.type || CARD_TYPE;
+    if (incomingType !== CARD_TYPE) {
+      throw new Error(`Card type must be '${CARD_TYPE}'.`);
+    }
     const normalized = normalizeConfig(cleanup.config);
-    validateConfig(normalized);
+    const hasRequiredEntities = hasRequiredEntityValues(normalized.entities, REQUIRED_ENTITY_KEYS);
+    if (hasRequiredEntities) {
+      validateConfig(normalized);
+    }
     this._config = normalized;
     this._lastSignature = "";
 
     this._ensureRendered();
+    this._syncPreviewPlaceholder(!hasRequiredEntities);
     this._applyTheme();
-    this._renderModel();
+    if (!this._showPreviewPlaceholder) {
+      this._renderModel();
+    }
   }
 
   set hass(hass) {
     this._hass = hass;
     if (!this._config) {
+      return;
+    }
+    if (this._showPreviewPlaceholder) {
       return;
     }
 
@@ -138,7 +196,10 @@ export class HouseEnergyBarCard extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <ha-card>
         <div class="shell">
-          ${SEGMENT_DEFS.map((segment) => buildSegmentSectionMarkup(segment)).join("")}
+          ${buildCardPreviewMarkup(CARD_DESCRIPTION)}
+          <div class="card-content">
+            ${SEGMENT_DEFS.map((segment) => buildSegmentSectionMarkup(segment)).join("")}
+          </div>
         </div>
       </ha-card>
       ${styles()}
@@ -146,6 +207,8 @@ export class HouseEnergyBarCard extends HTMLElement {
 
     this._refs = {
       shell: this.shadowRoot.querySelector(".shell"),
+      previewPlaceholder: this.shadowRoot.querySelector(".card-preview-placeholder"),
+      content: this.shadowRoot.querySelector(".card-content"),
       segments: SEGMENT_DEFS.reduce((result, segment) => {
         const section = this.shadowRoot.querySelector(`[data-segment="${segment.id}"]`);
         result[segment.id] = {
@@ -160,6 +223,15 @@ export class HouseEnergyBarCard extends HTMLElement {
         return result;
       }, {}),
     };
+  }
+
+  _syncPreviewPlaceholder(showPlaceholder) {
+    this._showPreviewPlaceholder = showPlaceholder === true;
+    syncCardPreviewVisibility(
+      this._refs?.previewPlaceholder,
+      [this._refs?.content],
+      this._showPreviewPlaceholder,
+    );
   }
 
   _renderModel() {
@@ -188,11 +260,11 @@ export class HouseEnergyBarCard extends HTMLElement {
         return;
       }
 
-      applyMetric(this._hass, segmentRefs.primary, segmentModel.primary, { settleOnChange: true });
+      applyMetricButtonState(this._hass, segmentRefs.primary, segmentModel.primary, buildMetricOptions(true));
       segmentRefs.secondaries.forEach((secondaryRef, index) => {
-        applyMetric(this._hass, secondaryRef, segmentModel.chips[index], { hideWhenUnavailable: true });
+        applyMetricButtonState(this._hass, secondaryRef, segmentModel.chips[index], buildMetricOptions(false, true));
       });
-      syncChipRowVisibility(segmentRefs.chipRow, ...segmentRefs.secondaries);
+      syncMetricButtonRowVisibility(segmentRefs.chipRow, ...segmentRefs.secondaries);
     });
 
     this._applySectionBackgrounds(config.colors, config.track_blend, config.fade_between_segments, visibleSegments);
@@ -275,22 +347,19 @@ class HouseEnergyBarEditor extends HTMLElement {
     this._rawConfig = null;
     this._hass = null;
     this._form = null;
-    this._cleanupState = {
-      pendingKey: "",
-      lastAppliedKey: "",
-    };
+    this._cleanupState = createEditorCleanupState();
     this._onFormValueChanged = (event) => this._handleFormValueChanged(event);
   }
 
   setConfig(config) {
-    const incoming = config && typeof config === "object" ? config : {};
-    const cleanup = runConfigCleanup(incoming, EDITOR_CLEANUP_STEPS);
-    this._rawConfig = {
-      ...cleanup.config,
-      type: cleanup.config.type || incoming.type || CARD_TYPE,
-    };
-    this._rawConfig.color_preset = normalizeColorPresetName(this._rawConfig.color_preset);
-    this._config = normalizeConfig(this._rawConfig);
+    const cleanup = applyEditorIncomingConfig(
+      this,
+      config,
+      HOUSE_EDITOR_CLEANUP_STEPS,
+      CARD_TYPE,
+      normalizeColorPresetName,
+      normalizeConfig,
+    );
     this._render();
     if (cleanup.changed) {
       queueConfigCleanup(this, this._rawConfig, this._cleanupState);
@@ -312,30 +381,16 @@ class HouseEnergyBarEditor extends HTMLElement {
   }
 
   _render() {
-    if (!this.shadowRoot) {
-      return;
-    }
-
-    if (!this._form) {
-      this.shadowRoot.innerHTML = `
-        <div class="editor-shell">
-          <ha-form class="editor-form"></ha-form>
-        </div>
-        ${editorStyles()}
-      `;
-      this._form = this.shadowRoot.querySelector(".editor-form");
-      this._form?.addEventListener("value-changed", this._onFormValueChanged);
-    }
-
+    this._form = ensureSingleFormEditor(this, this._onFormValueChanged);
     if (!this._form) {
       return;
     }
-
-    const config = this._config || normalizeConfig(HouseEnergyBarCard.getStubConfig());
-    this._form.hass = this._hass;
-    this._form.schema = buildEditorFormSchema(this._rawConfig);
-    this._form.data = buildHouseEditorFormData(config, this._rawConfig);
-    this._form.computeLabel = (schema) => schema.label || schema.name || "";
+    renderSingleFormEditor(
+      this,
+      () => normalizeConfig(HouseEnergyBarCard.getStubConfig()),
+      (_config, rawConfig) => buildEditorFormSchema(rawConfig),
+      buildHouseEditorFormData,
+    );
   }
 
   _handleFormValueChanged(event) {
@@ -368,8 +423,8 @@ class HouseEnergyBarEditor extends HTMLElement {
     if (useOverrides) {
       nextRaw.colors = {
         ...resolveEditorBackgroundColor(value.colors, this._rawConfig?.colors),
-        ...pickHouseColorOverrides(this._config?.colors),
-        ...(hadOverrides ? pickHouseEditorColorOverrides(value.colors) : {}),
+        ...pickMappedStringValues(this._config?.colors, HOUSE_COLOR_FIELD_MAP),
+        ...(hadOverrides ? pickMappedStringValues(value.colors, HOUSE_COLOR_FIELD_MAP) : {}),
       };
       nextRaw.track_blend = normalizeTrackBlendOverrideValue(
         value.track_blend,
@@ -385,123 +440,24 @@ class HouseEnergyBarEditor extends HTMLElement {
       }
     }
 
-    this._rawConfig = nextRaw;
-    this._config = normalizeConfig(this._rawConfig);
-
+    commitEditorRawConfig(this, nextRaw, normalizeConfig);
     this._render();
     emitConfigChanged(this, this._rawConfig);
   }
-}
-
-function applyMetric(hass, button, metric, options = {}) {
-  if (!button) {
-    return;
-  }
-
-  const nextValue = metric?.value || "—";
-  const previousValue = button.dataset.metricValue || "";
-  const valueEl = button.querySelector(".metric-text");
-  if (valueEl) {
-    valueEl.textContent = nextValue;
-  }
-
-  button.dataset.metricValue = nextValue;
-  button.dataset.entityId = metric?.entityId || "";
-  button.disabled = !metric?.available;
-  button.title = metric?.title || "";
-  button.setAttribute("aria-label", metric?.title || "Energy metric");
-  button.hidden = Boolean(options.hideWhenUnavailable && !metric?.configured);
-
-  const iconEl = button.querySelector(".metric-icon");
-  if (iconEl) {
-    syncEntityIcon(iconEl, hass, metric?.stateObj || null);
-  }
-
-  if (options.settleOnChange && shouldAnimatePrimarySettle(previousValue, nextValue)) {
-    animatePrimarySettle(button);
-  }
-}
-
-function syncChipRowVisibility(row, ...buttons) {
-  if (!row) {
-    return;
-  }
-  const hasVisibleChip = buttons.some((button) => button && button.hidden !== true);
-  row.hidden = !hasVisibleChip;
 }
 
 function buildSegmentSectionMarkup(segment) {
   return `
     <section class="section section--segment" aria-label="${segment.label}" data-segment="${segment.id}">
       <div class="primary-row">
-        ${buildMetricButton(`${segment.id}-primary`, true)}
+        ${buildMetricButtonMarkup(`${segment.id}-primary`, true)}
       </div>
       <div class="chip-row chip-row--segment">
-        ${buildMetricButton(`${segment.id}-secondary-1`, false)}
-        ${buildMetricButton(`${segment.id}-secondary-2`, false)}
+        ${buildMetricButtonMarkup(`${segment.id}-secondary-1`, false)}
+        ${buildMetricButtonMarkup(`${segment.id}-secondary-2`, false)}
       </div>
     </section>
   `;
-}
-
-function buildMetricButton(ref, primary) {
-  const buttonClass = primary ? "metric-button metric-button--primary" : "metric-button metric-button--chip";
-  const iconClass = primary ? "metric-icon metric-icon--primary" : "metric-icon metric-icon--chip";
-  return `
-    <button class="${buttonClass}" data-ref="${ref}" type="button">
-      <ha-state-icon class="${iconClass}" hidden></ha-state-icon>
-      <span class="metric-text">—</span>
-    </button>
-  `;
-}
-
-function syncEntityIcon(iconEl, hass, stateObj) {
-  if (!iconEl) {
-    return;
-  }
-
-  if (stateObj) {
-    iconEl.hass = hass || null;
-    iconEl.stateObj = stateObj;
-    iconEl.state = stateObj;
-    iconEl.hidden = false;
-    return;
-  }
-
-  iconEl.hass = hass || null;
-  iconEl.stateObj = null;
-  iconEl.state = null;
-  iconEl.hidden = true;
-}
-
-function shouldAnimatePrimarySettle(previousValue, nextValue) {
-  return Boolean(previousValue)
-    && previousValue !== nextValue
-    && previousValue !== "—"
-    && nextValue !== "—";
-}
-
-function animatePrimarySettle(button) {
-  if (!button?.animate) {
-    return;
-  }
-  button.getAnimations().forEach((animation) => {
-    if (animation.id === "primary-settle") {
-      animation.cancel();
-    }
-  });
-  const animation = button.animate(
-    [
-      { transform: "translateY(1.5px)", opacity: 0.84 },
-      { transform: "translateY(0)", opacity: 1 },
-    ],
-    {
-      duration: PRIMARY_SETTLE_DURATION_MS,
-      easing: COLOR_EASING,
-      fill: "none",
-    },
-  );
-  animation.id = "primary-settle";
 }
 
 function styles() {
@@ -538,15 +494,28 @@ function styles() {
 
       .shell {
         width: 100%;
-        height: var(--bb-bar-height);
+        display: block;
+      }
+
+      ${buildCardPreviewStyles("--bb-bar-height")}
+
+      .card-content {
+        width: 100%;
+        height: 100%;
         display: grid;
         grid-template-columns: var(--bb-columns);
         align-items: stretch;
+        grid-column: 1 / -1;
+        height: var(--bb-bar-height);
         background: var(--bb-track-bg);
         color: var(--bb-text);
         transition: background-color ${COLOR_TRANSITION}, color ${COLOR_TRANSITION};
         border-radius: var(--bb-radius);
         overflow: hidden;
+      }
+
+      .card-content[hidden] {
+        display: none !important;
       }
 
       .section {
@@ -709,19 +678,6 @@ function styles() {
   `;
 }
 
-function registerCustomCardMetadata(type, name, description) {
-  window.customCards = window.customCards || [];
-  if (window.customCards.some((item) => item.type === type)) {
-    return;
-  }
-  window.customCards.push({
-    type,
-    name,
-    description,
-    preview: true,
-  });
-}
-
 export function registerCard() {
   if (!customElements.get(CARD_ELEMENT_TAG)) {
     customElements.define(CARD_ELEMENT_TAG, HouseEnergyBarCard);
@@ -730,13 +686,21 @@ export function registerCard() {
   registerCustomCardMetadata(
     CARD_ELEMENT_TAG,
     CARD_NAME,
-    "House Energy Bar: compact metric overview with an optional solar lead segment for Home Assistant.",
+    CARD_DESCRIPTION,
   );
 }
 
-function buildTopFormSchema() {
-  const colorSelector = { text: {} };
+function buildMetricOptions(settleOnChange = false, hideWhenUnavailable = false) {
+  return {
+    defaultAriaLabel: "Energy metric",
+    hideWhenUnavailable,
+    settleOnChange,
+    settleDurationMs: PRIMARY_SETTLE_DURATION_MS,
+    settleEasing: COLOR_EASING,
+  };
+}
 
+function buildTopFormSchema() {
   return [
     {
       type: "expandable",
@@ -746,20 +710,18 @@ function buildTopFormSchema() {
           name: "bar_height",
           label: "Bar height (px)",
           required: true,
-          selector: { number: { min: 24, max: 72, step: 1, mode: "slider" } },
+          selector: buildSliderNumberSelector(EDITOR_SCHEMA_RANGE_BAR_HEIGHT),
         },
         {
           name: "corner_radius",
           label: "Corner radius (px)",
           required: true,
-          selector: { number: { min: 0, max: 30, step: 1, mode: "slider" } },
+          selector: buildSliderNumberSelector(EDITOR_SCHEMA_RANGE_CORNER_RADIUS),
         },
         {
           type: "grid",
           name: "colors",
-          schema: [
-            { name: "background", label: "Card background color", required: false, selector: colorSelector },
-          ],
+          schema: [buildBackgroundColorField()],
         },
         { name: "background_transparent", label: "Use transparent card background", selector: { boolean: {} } },
         { name: "show_divider", label: "Show separators between segments", selector: { boolean: {} } },
@@ -810,17 +772,15 @@ function buildBottomFormSchema(showSolarSegment) {
 }
 
 function buildColorOverridesGridSchema() {
-  const colorSelector = { text: {} };
-
   return [
-    { name: "track", label: "Base track color", required: false, selector: colorSelector },
-    { name: "text_light", label: "Light text and icon color", required: false, selector: colorSelector },
-    { name: "text_dark", label: "Dark text and icon color", required: false, selector: colorSelector },
-    { name: "divider", label: "Divider line color", required: false, selector: colorSelector },
-    { name: "energy_source", label: "PV color", required: false, selector: colorSelector },
-    { name: "energy_storage_supply", label: "Battery output color", required: false, selector: colorSelector },
-    { name: "grid_import", label: "Grid import color", required: false, selector: colorSelector },
-    { name: "grid_export", label: "Grid export color", required: false, selector: colorSelector },
+    { name: "track", label: "Base track color", required: false, selector: buildColorTextSelector() },
+    { name: "text_light", label: "Light text and icon color", required: false, selector: buildColorTextSelector() },
+    { name: "text_dark", label: "Dark text and icon color", required: false, selector: buildColorTextSelector() },
+    { name: "divider", label: "Divider line color", required: false, selector: buildColorTextSelector() },
+    { name: "energy_source", label: "PV color", required: false, selector: buildColorTextSelector() },
+    { name: "energy_storage_supply", label: "Battery output color", required: false, selector: buildColorTextSelector() },
+    { name: "grid_import", label: "Grid import color", required: false, selector: buildColorTextSelector() },
+    { name: "grid_export", label: "Grid export color", required: false, selector: buildColorTextSelector() },
   ];
 }
 
@@ -856,7 +816,7 @@ function buildColorSectionSchema(showOverrides) {
       name: "track_blend",
       label: "Track blend",
       required: false,
-      selector: { number: { min: 0.1, max: 0.4, step: 0.01, mode: "slider" } },
+      selector: buildSliderNumberSelector(EDITOR_SCHEMA_RANGE_TRACK_BLEND),
     });
     schema.push({
       type: "grid",
@@ -885,169 +845,8 @@ function buildEditorFormSchema(rawConfig) {
 function buildHouseEditorFormData(config, rawConfig) {
   return {
     ...config,
-    use_color_overrides: hasColorOverrides(rawConfig),
-    track_blend: resolveEditorTrackBlend(rawConfig, config.track_blend),
-    colors: {
-      ...pickBackgroundColor(rawConfig?.colors),
-      ...pickHouseEditorColorOverrides(rawConfig?.colors),
-    },
+    ...buildColorOverrideEditorState(config, rawConfig, HOUSE_COLOR_FIELD_MAP, DEFAULT_CONFIG.colors.background),
   };
-}
-
-function buildTopFormData(config) {
-  return {
-    bar_height: config.bar_height,
-    corner_radius: config.corner_radius,
-    show_solar_segment: config.show_solar_segment,
-    background_transparent: config.background_transparent,
-    show_divider: config.show_divider,
-    colors: pickBackgroundColor(config?.colors),
-  };
-}
-
-function hasColorOverrides(config) {
-  const colors = config?.colors;
-  const hasTokenOverrides = Boolean(colors)
-    && typeof colors === "object"
-    && Object.entries(colors).some(
-      ([key, value]) => key !== "background" && typeof value === "string" && value.trim().length > 0,
-    );
-  const trackBlend = Number(config?.track_blend);
-  return hasTokenOverrides || Number.isFinite(trackBlend);
-}
-
-function editorStyles() {
-  return `
-    <style>
-      .editor-shell {
-        display: grid;
-        gap: 12px;
-      }
-    </style>
-  `;
-}
-
-function syncEditorFormsHass(forms, hass) {
-  for (const form of forms) {
-    if (form) {
-      form.hass = hass;
-    }
-  }
-}
-
-function pickHouseColorOverrides(colors) {
-  const source = colors && typeof colors === "object" ? colors : {};
-  return {
-    track: source.track || "",
-    text_light: source.text_light || source.text || "",
-    text_dark: source.text_dark || source.text || "",
-    divider: source.divider || "",
-    energy_source: source.energy_source || "",
-    energy_storage_supply: source.energy_storage_supply || "",
-    grid_import: source.grid_import || "",
-    grid_export: source.grid_export || "",
-  };
-}
-
-function pickHouseEditorColorOverrides(colors) {
-  const source = colors && typeof colors === "object" ? colors : {};
-  return {
-    track: source.track || "",
-    text_light: source.text_light || source.text || "",
-    text_dark: source.text_dark || source.text || "",
-    divider: source.divider || "",
-    energy_source: source.energy_source || "",
-    energy_storage_supply: source.energy_storage_supply || "",
-    grid_import: source.grid_import || "",
-    grid_export: source.grid_export || "",
-  };
-}
-
-function pickBackgroundColor(colors) {
-  if (!colors || typeof colors !== "object" || typeof colors.background !== "string" || colors.background.trim().length === 0) {
-    return {};
-  }
-  const background = colors.background.trim();
-  if (background.toUpperCase() === DEFAULT_CONFIG.colors.background) {
-    return {};
-  }
-  return { background };
-}
-
-function resolveEditorBackgroundColor(formColors, fallbackColors) {
-  if (formColors && typeof formColors === "object" && Object.prototype.hasOwnProperty.call(formColors, "background")) {
-    return pickBackgroundColor(formColors);
-  }
-  return pickBackgroundColor(fallbackColors);
-}
-
-function resolveEditorTrackBlend(rawConfig, fallback) {
-  const trackBlend = Number(rawConfig?.track_blend);
-  if (!Number.isFinite(trackBlend)) {
-    return fallback;
-  }
-  return Math.min(0.4, Math.max(0.1, trackBlend));
-}
-
-function normalizeTrackBlendOverrideValue(value, fallback) {
-  const trackBlend = Number(value);
-  if (!Number.isFinite(trackBlend)) {
-    return fallback;
-  }
-  return Math.min(0.4, Math.max(0.1, trackBlend));
-}
-
-function migrateLegacyHouseEnergyColors(config) {
-  if (!config || typeof config !== "object" || !config.colors || typeof config.colors !== "object") {
-    return config;
-  }
-
-  const colors = config.colors;
-  const nextColors = {
-    ...colors,
-  };
-  let changed = false;
-
-  changed = moveLegacyHouseColor(nextColors, "segment1", "grid_import") || changed;
-  changed = moveLegacyHouseColor(nextColors, "segment2", "energy_storage_supply") || changed;
-  changed = moveLegacyHouseColor(nextColors, "segment3", "grid_export") || changed;
-  if (!nextColors.text_light && typeof colors.text === "string") {
-    nextColors.text_light = colors.text;
-    changed = true;
-  }
-  if (!nextColors.text_dark && typeof colors.text === "string") {
-    nextColors.text_dark = colors.text;
-    changed = true;
-  }
-  if ("text" in nextColors) {
-    delete nextColors.text;
-    changed = true;
-  }
-
-  if (!changed) {
-    return config;
-  }
-
-  return {
-    ...config,
-    colors: nextColors,
-  };
-}
-
-function moveLegacyHouseColor(colors, legacyKey, nextKey) {
-  let changed = false;
-
-  if (!colors[nextKey] && typeof colors[legacyKey] === "string") {
-    colors[nextKey] = colors[legacyKey];
-    changed = true;
-  }
-
-  if (legacyKey in colors) {
-    delete colors[legacyKey];
-    changed = true;
-  }
-
-  return changed;
 }
 
 function getVisibleSegmentDefs(config, model) {

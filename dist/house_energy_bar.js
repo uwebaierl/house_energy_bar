@@ -576,6 +576,138 @@ function pickColorTokens(preset) {
   }, {});
 }
 
+/* src/_shared/editor.js */
+function buildBasicEditorStyles() {
+  return `
+    <style>
+      .editor-shell {
+        display: grid;
+        gap: 12px;
+      }
+    </style>
+  `;
+}
+
+function syncEditorFormsHass(forms, hass) {
+  for (const form of forms) {
+    if (form) {
+      form.hass = hass;
+    }
+  }
+}
+
+function syncEntityIcon(iconEl, hass, stateObj) {
+  if (!iconEl) {
+    return;
+  }
+
+  if (stateObj) {
+    iconEl.hass = hass || null;
+    iconEl.stateObj = stateObj;
+    iconEl.state = stateObj;
+    iconEl.hidden = false;
+    return;
+  }
+
+  iconEl.hass = hass || null;
+  iconEl.stateObj = null;
+  iconEl.state = null;
+  iconEl.hidden = true;
+}
+
+function registerCustomCardMetadata(type, name, description) {
+  window.customCards = window.customCards || [];
+  if (window.customCards.some((item) => item.type === type)) {
+    return;
+  }
+  window.customCards.push({
+    type,
+    name,
+    description,
+    preview: true,
+  });
+}
+
+function pickMappedStringValues(sourceValue, fieldMap, fallback = "") {
+  const source = isPlainObjectEditorValue(sourceValue) ? sourceValue : {};
+  const normalizedFallback = typeof fallback === "string" ? fallback : "";
+
+  return Object.entries(fieldMap || {}).reduce((result, [key, candidates]) => {
+    result[key] = findFirstStringValue(source, candidates, normalizedFallback);
+    return result;
+  }, {});
+}
+
+function pickBackgroundColor(colors, defaultBackground = "#000000") {
+  if (!isPlainObjectEditorValue(colors) || typeof colors.background !== "string" || colors.background.trim().length === 0) {
+    return {};
+  }
+
+  const background = colors.background.trim();
+  if (background.toUpperCase() === String(defaultBackground || "#000000").toUpperCase()) {
+    return {};
+  }
+  return { background };
+}
+
+function resolveEditorBackgroundColor(formColors, fallbackColors, defaultBackground = "#000000") {
+  if (isPlainObjectEditorValue(formColors) && Object.prototype.hasOwnProperty.call(formColors, "background")) {
+    return pickBackgroundColor(formColors, defaultBackground);
+  }
+  return pickBackgroundColor(fallbackColors, defaultBackground);
+}
+
+function resolveEditorTrackBlend(rawConfig, fallback, min = 0.1, max = 0.4) {
+  return normalizeBoundedNumber(rawConfig?.track_blend, fallback, min, max);
+}
+
+function normalizeTrackBlendOverrideValue(value, fallback, min = 0.1, max = 0.4) {
+  return normalizeBoundedNumber(value, fallback, min, max);
+}
+
+function hasColorOverrides(rawConfig) {
+  const colors = rawConfig?.colors;
+  const hasTokenOverrides = isPlainObjectEditorValue(colors)
+    && Object.entries(colors).some(
+      ([key, value]) => key !== "background" && typeof value === "string" && value.trim().length > 0,
+    );
+  const trackBlend = Number(rawConfig?.track_blend);
+  return hasTokenOverrides || Number.isFinite(trackBlend);
+}
+
+function buildColorOverrideEditorState(config, rawConfig, fieldMap, defaultBackground = "#000000") {
+  return {
+    use_color_overrides: hasColorOverrides(rawConfig),
+    track_blend: resolveEditorTrackBlend(rawConfig, config?.track_blend),
+    colors: {
+      ...pickBackgroundColor(rawConfig?.colors, defaultBackground),
+      ...pickMappedStringValues(rawConfig?.colors, fieldMap),
+    },
+  };
+}
+
+function findFirstStringValue(source, candidates, fallback) {
+  const keys = Array.isArray(candidates) ? candidates : [candidates];
+  for (const candidate of keys) {
+    if (typeof source[candidate] === "string" && source[candidate].trim().length > 0) {
+      return source[candidate].trim();
+    }
+  }
+  return fallback;
+}
+
+function normalizeBoundedNumber(value, fallback, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return clamp(min, numeric, max);
+}
+
+function isPlainObjectEditorValue(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 /* src/_shared/interaction.js */
 function openMoreInfo(host, hass, entityId) {
   if (!entityId) {
@@ -609,67 +741,295 @@ function computeEntitySignature(hass, entityIds) {
     .join("|");
 }
 
-/* src/validate.js */
-function validateConfig(config) {
+/* src/_shared/legacy-config.js */
+function migrateLegacyColorConfig(config, colorAliases, options = {}) {
+  if (!config || typeof config !== "object" || !config.colors || typeof config.colors !== "object") {
+    return config;
+  }
+
+  const colors = config.colors;
+  const nextColors = {
+    ...colors,
+  };
+  let changed = false;
+
+  for (const [nextKey, legacyKeys] of Object.entries(colorAliases || {})) {
+    changed = moveLegacyColor(nextColors, legacyKeys, nextKey) || changed;
+  }
+
+  if (options.migrateTextPair !== false) {
+    const legacyTextKey = options.legacyTextKey || "text";
+    if (!nextColors.text_light && typeof colors[legacyTextKey] === "string") {
+      nextColors.text_light = colors[legacyTextKey];
+      changed = true;
+    }
+    if (!nextColors.text_dark && typeof colors[legacyTextKey] === "string") {
+      nextColors.text_dark = colors[legacyTextKey];
+      changed = true;
+    }
+  }
+
+  const keysToRemove = new Set();
+  for (const legacyKeys of Object.values(colorAliases || {})) {
+    const keys = Array.isArray(legacyKeys) ? legacyKeys : [legacyKeys];
+    for (const key of keys) {
+      if (typeof key === "string" && key.length > 0) {
+        keysToRemove.add(key);
+      }
+    }
+  }
+  if (options.migrateTextPair !== false) {
+    keysToRemove.add(options.legacyTextKey || "text");
+  }
+
+  for (const key of keysToRemove) {
+    if (key in nextColors) {
+      delete nextColors[key];
+      changed = true;
+    }
+  }
+
+  if (!changed) {
+    return config;
+  }
+
+  return {
+    ...config,
+    colors: nextColors,
+  };
+}
+
+function migrateObjectKey(config, legacyKey, nextKey) {
+  if (!config || typeof config !== "object" || !(legacyKey in config) || nextKey in config) {
+    return config;
+  }
+
+  const next = {
+    ...config,
+    [nextKey]: isPlainObjectLegacyValue(config[legacyKey]) ? { ...config[legacyKey] } : config[legacyKey],
+  };
+  delete next[legacyKey];
+  return next;
+}
+
+function moveLegacyColor(colors, legacyKeys, nextKey) {
+  if (!colors || typeof colors !== "object") {
+    return false;
+  }
+
+  const keys = Array.isArray(legacyKeys) ? legacyKeys : [legacyKeys];
+  for (const legacyKey of keys) {
+    if (!colors[nextKey] && typeof colors[legacyKey] === "string") {
+      colors[nextKey] = colors[legacyKey];
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isPlainObjectLegacyValue(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/* src/migrations.js */
+const HOUSE_CONFIG_CLEANUP_STEPS = [
+  createRemovePathsCleanup(["segment_tokens"]),
+  migrateLegacyHouseEnergyColors,
+];
+
+const HOUSE_EDITOR_CLEANUP_STEPS = [
+  createRemovePathsCleanup(["segment_tokens"]),
+  migrateLegacyHouseEnergyColors,
+];
+
+function migrateLegacyHouseEnergyColors(config) {
+  return migrateLegacyColorConfig(config, {
+    grid_import: "segment1",
+    energy_storage_supply: "segment2",
+    grid_export: "segment3",
+  });
+}
+
+/* src/_shared/validation.js */
+function validateConfigObject(config) {
   if (!config || typeof config !== "object") {
     throw new Error("Invalid configuration.");
   }
+}
 
-  if (config.type !== CARD_TYPE) {
-    throw new Error(`Card type must be '${CARD_TYPE}'.`);
+function validateCardType(config, cardType) {
+  if (config.type !== cardType) {
+    throw new Error(`Card type must be '${cardType}'.`);
+  }
+}
+
+function validateRange(value, key, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < min || numeric > max) {
+    throw new Error(`${key} must be a number between ${min} and ${max}.`);
+  }
+}
+
+function validateOptionalRange(value, key, min, max) {
+  if (value === undefined) {
+    return;
+  }
+  validateRange(value, key, min, max);
+}
+
+function validateIntegerRange(value, key, min, max) {
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < min || numeric > max) {
+    throw new Error(`${key} must be an integer between ${min} and ${max}.`);
+  }
+}
+
+function validateBoolean(value, key) {
+  if (typeof value !== "boolean") {
+    throw new Error(`${key} must be true or false.`);
+  }
+}
+
+function validateOptionalBoolean(value, key) {
+  if (value === undefined) {
+    return;
+  }
+  validateBoolean(value, key);
+}
+
+function validateColorPresetValue(value, isKnownColorPreset) {
+  if (value === undefined) {
+    return;
+  }
+  if (typeof value !== "string" || typeof isKnownColorPreset !== "function" || !isKnownColorPreset(value)) {
+    throw new Error("color_preset must be a supported preset name.");
+  }
+}
+
+function validateRequiredStringMap(values, keys, prefix) {
+  if (!values || typeof values !== "object") {
+    throw new Error(`${prefix} must be an object.`);
   }
 
-  validateRange(config.bar_height, "bar_height", 24, 72);
-  validateRange(config.corner_radius, "corner_radius", 0, 30);
-  validateRange(config.track_blend, "track_blend", 0.1, 0.4);
-  validateColorPreset(config.color_preset);
-  if (typeof config.fade_between_segments !== "boolean") {
-    throw new Error("fade_between_segments must be true or false.");
+  for (const key of keys) {
+    const value = values[key];
+    if (typeof value !== "string" || value.trim().length === 0) {
+      throw new Error(`${prefix}.${key} must be a non-empty string.`);
+    }
   }
-  if (typeof config.show_solar_segment !== "boolean") {
-    throw new Error("show_solar_segment must be true or false.");
-  }
-  if (typeof config.background_transparent !== "boolean") {
-    throw new Error("background_transparent must be true or false.");
-  }
-  if (typeof config.show_divider !== "boolean") {
-    throw new Error("show_divider must be true or false.");
-  }
+}
 
-  if (!config.entities || typeof config.entities !== "object") {
+function validateRequiredEntityMap(values, keys) {
+  if (!values || typeof values !== "object") {
     throw new Error("entities must be an object.");
   }
 
-  for (const key of REQUIRED_ENTITY_KEYS) {
-    const value = config.entities[key];
+  for (const key of keys) {
+    const value = values[key];
     if (typeof value !== "string" || value.trim().length === 0) {
       throw new Error(`entities.${key} must be a non-empty entity id string.`);
     }
   }
+}
 
-  for (const key of OPTIONAL_ENTITY_KEYS) {
-    const value = config.entities[key];
+function validateOptionalEntityMap(values, keys) {
+  if (!values || typeof values !== "object") {
+    throw new Error("entities must be an object.");
+  }
+
+  for (const key of keys) {
+    const value = values[key];
     if (value !== undefined && value !== null && typeof value !== "string") {
       throw new Error(`entities.${key} must be an entity id string when set.`);
     }
   }
+}
 
-  if (!config.colors || typeof config.colors !== "object") {
+function validateRequiredColorMap(values, keys) {
+  if (!values || typeof values !== "object") {
     throw new Error("colors must be an object.");
   }
-  for (const key of COLOR_KEYS) {
-    const value = config.colors[key];
+
+  for (const key of keys) {
+    const value = values[key];
     if (typeof value !== "string" || value.trim().length === 0) {
       throw new Error(`colors.${key} must be a non-empty color string.`);
     }
   }
+}
 
+function normalizeObjectInput(value) {
+  return value && typeof value === "object" ? value : {};
+}
+
+function normalizeString(value, fallback = "") {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return fallback;
+  }
+  return value.trim();
+}
+
+function normalizeEntity(value) {
+  return normalizeString(value, "");
+}
+
+function normalizeOptionalEntity(value) {
+  return normalizeString(value, "");
+}
+
+function normalizeMappedStringValues(sourceValue, fieldMap, fallback = null) {
+  const source = normalizeObjectInput(sourceValue);
+
+  return Object.entries(fieldMap || {}).reduce((result, [key, candidates]) => {
+    result[key] = normalizeCandidateValue(source, candidates, fallback);
+    return result;
+  }, {});
+}
+
+function normalizeCandidateValue(source, candidates, fallback) {
+  const keys = Array.isArray(candidates) ? candidates : [candidates];
+  for (const candidate of keys) {
+    if (typeof source[candidate] === "string" && source[candidate].trim().length > 0) {
+      return source[candidate].trim();
+    }
+  }
+  return fallback;
+}
+
+/* src/validate.js */
+const HOUSE_COLOR_OVERRIDE_MAP = {
+  track: ["track"],
+  text_light: ["text_light", "text"],
+  text_dark: ["text_dark", "text"],
+  divider: ["divider"],
+  energy_source: ["energy_source"],
+  energy_storage_supply: ["energy_storage_supply", "segment2"],
+  grid_import: ["grid_import", "segment1"],
+  grid_export: ["grid_export", "segment3"],
+};
+
+function validateConfig(config) {
+  validateConfigObject(config);
+  validateCardType(config, CARD_TYPE);
+
+  validateRange(config.bar_height, "bar_height", 24, 72);
+  validateRange(config.corner_radius, "corner_radius", 0, 30);
+  validateRange(config.track_blend, "track_blend", 0.1, 0.4);
+  validateColorPresetValue(config.color_preset, isKnownColorPreset);
+  validateBoolean(config.fade_between_segments, "fade_between_segments");
+  validateBoolean(config.show_solar_segment, "show_solar_segment");
+  validateBoolean(config.background_transparent, "background_transparent");
+  validateBoolean(config.show_divider, "show_divider");
+  validateRequiredEntityMap(config.entities, REQUIRED_ENTITY_KEYS);
+  validateOptionalEntityMap(config.entities, OPTIONAL_ENTITY_KEYS);
+  validateRequiredColorMap(config.colors, COLOR_KEYS);
 }
 
 function normalizeConfig(config) {
   const source = config && typeof config === "object" ? config : {};
-  const entitiesInput = source.entities && typeof source.entities === "object" ? source.entities : {};
-  const colorsInput = source.colors && typeof source.colors === "object" ? source.colors : {};
+  const entitiesInput = normalizeObjectInput(source.entities);
+  const colorsInput = normalizeObjectInput(source.colors);
 
   return {
     type: CARD_TYPE,
@@ -693,53 +1053,21 @@ function normalizeConfig(config) {
       : source.show_divider,
     entities: normalizeEntities(entitiesInput),
     colors: {
-      background: normalizeColor(colorsInput.background, DEFAULT_CONFIG.colors.background),
+      background: normalizeString(colorsInput.background, DEFAULT_CONFIG.colors.background),
       ...mergeColorPresetTokens(
         source.color_preset,
         {},
-        normalizeColorOverrides(colorsInput),
+        normalizeMappedStringValues(colorsInput, HOUSE_COLOR_OVERRIDE_MAP, null),
       ),
     },
   };
-}
-
-function validateRange(value, key, min, max) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < min || n > max) {
-    throw new Error(`${key} must be a number between ${min} and ${max}.`);
-  }
-}
-
-function normalizeRequiredEntity(value) {
-  if (typeof value !== "string") {
-    return "";
-  }
-  return value.trim();
-}
-
-function normalizeOptionalEntity(value) {
-  if (value === undefined || value === null) {
-    return "";
-  }
-  if (typeof value !== "string") {
-    return "";
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : "";
-}
-
-function normalizeColor(value, fallback) {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return fallback;
-  }
-  return value.trim();
 }
 
 function normalizeEntities(entitiesInput) {
   const entities = {};
 
   for (const key of REQUIRED_ENTITY_KEYS) {
-    entities[key] = normalizeRequiredEntity(entitiesInput[key]);
+    entities[key] = normalizeEntity(entitiesInput[key]);
   }
 
   for (const key of OPTIONAL_ENTITY_KEYS) {
@@ -749,36 +1077,287 @@ function normalizeEntities(entitiesInput) {
   return entities;
 }
 
-function validateColorPreset(value) {
-  if (value === undefined) {
-    return;
+/* src/_shared/editor-schema.js */
+const EDITOR_SCHEMA_RANGE_BAR_HEIGHT = Object.freeze({
+  min: 24,
+  max: 72,
+  step: 1,
+});
+
+const EDITOR_SCHEMA_RANGE_CORNER_RADIUS = Object.freeze({
+  min: 0,
+  max: 30,
+  step: 1,
+});
+
+const EDITOR_SCHEMA_RANGE_TRACK_BLEND = Object.freeze({
+  min: 0.1,
+  max: 0.4,
+  step: 0.01,
+});
+
+const EDITOR_SCHEMA_RANGE_ROW_GAP = Object.freeze({
+  min: 0,
+  max: 4,
+  step: 0.1,
+});
+
+const EDITOR_SCHEMA_RANGE_SPRING_STIFFNESS = Object.freeze({
+  min: 80,
+  max: 420,
+  step: 1,
+});
+
+const EDITOR_SCHEMA_RANGE_SPRING_DAMPING = Object.freeze({
+  min: 10,
+  max: 60,
+  step: 1,
+});
+
+const EDITOR_SCHEMA_RANGE_VALUE_TWEEN_MS = Object.freeze({
+  min: 150,
+  max: 250,
+  step: 1,
+});
+
+const EDITOR_SCHEMA_RANGE_VISIBILITY_THRESHOLD = Object.freeze({
+  min: 0,
+  max: 5000,
+  step: 1,
+});
+
+function buildColorTextSelector() {
+  return { text: {} };
+}
+
+function buildSliderNumberSelector(range) {
+  return {
+    number: {
+      min: range.min,
+      max: range.max,
+      step: range.step,
+      mode: "slider",
+    },
+  };
+}
+
+function buildBoxNumberSelector(range) {
+  return {
+    number: {
+      min: range.min,
+      max: range.max,
+      step: range.step,
+      mode: "box",
+    },
+  };
+}
+
+function buildBackgroundColorField(label = "Card background color") {
+  return {
+    name: "background",
+    label,
+    required: false,
+    selector: buildColorTextSelector(),
+  };
+}
+
+/* src/_shared/preview.js */
+function buildCardPreviewMarkup(description) {
+  return `
+    <div class="card-preview-placeholder" hidden>
+      <p class="card-preview-placeholder__text">${description}</p>
+    </div>
+  `;
+}
+
+function buildCardPreviewStyles(heightCssVarName) {
+  return `
+      .card-preview-placeholder {
+        grid-column: 1 / -1;
+        min-height: var(${heightCssVarName});
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        justify-self: center;
+        max-width: 100%;
+        padding: 16px 20px;
+        text-align: center;
+      }
+
+      .card-preview-placeholder[hidden] {
+        display: none;
+      }
+
+      .card-preview-placeholder__text {
+        margin: 0;
+        color: var(--primary-text-color);
+        font-size: 15px;
+        line-height: 1.35;
+      }
+  `;
+}
+
+function syncCardPreviewVisibility(previewPlaceholderEl, contentElements, showPlaceholder) {
+  if (previewPlaceholderEl) {
+    previewPlaceholderEl.hidden = showPlaceholder !== true;
   }
-  if (typeof value !== "string" || !isKnownColorPreset(value)) {
-    throw new Error("color_preset must be a supported preset name.");
+
+  for (const element of contentElements || []) {
+    if (element) {
+      element.hidden = showPlaceholder === true;
+    }
   }
 }
 
-function normalizeColorOverrides(colorsInput) {
+function hasRequiredEntityValues(entities, requiredKeys) {
+  return (requiredKeys || []).every((key) => {
+    const value = entities?.[key];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+/* src/_shared/editor-controller.js */
+function createEditorCleanupState() {
   return {
-    background: normalizeColor(colorsInput.background, null),
-    track: normalizeColor(colorsInput.track, null),
-    text_light: normalizeColor(colorsInput.text_light ?? colorsInput.text, null),
-    text_dark: normalizeColor(colorsInput.text_dark ?? colorsInput.text, null),
-    divider: normalizeColor(colorsInput.divider, null),
-    energy_source: normalizeColor(colorsInput.energy_source, null),
-    energy_storage_supply: normalizeColor(
-      colorsInput.energy_storage_supply ?? colorsInput.segment2,
-      null,
-    ),
-    grid_import: normalizeColor(
-      colorsInput.grid_import ?? colorsInput.segment1,
-      null,
-    ),
-    grid_export: normalizeColor(
-      colorsInput.grid_export ?? colorsInput.segment3,
-      null,
-    ),
+    pendingKey: "",
+    lastAppliedKey: "",
   };
+}
+
+function applyEditorIncomingConfig(host, incomingConfig, cleanupSteps, cardType, normalizeColorPresetName, normalizeConfig) {
+  const incoming = isPlainObjectEditorControllerValue(incomingConfig) ? incomingConfig : {};
+  const cleanup = runConfigCleanup(incoming, cleanupSteps);
+  host._rawConfig = {
+    ...cleanup.config,
+    type: cleanup.config.type || incoming.type || cardType,
+  };
+  host._rawConfig.color_preset = normalizeColorPresetName(host._rawConfig.color_preset);
+  host._config = normalizeConfig(host._rawConfig);
+  return cleanup;
+}
+
+function commitEditorRawConfig(host, nextRawConfig, normalizeConfig) {
+  host._rawConfig = nextRawConfig;
+  host._config = normalizeConfig(host._rawConfig);
+}
+
+function ensureSingleFormEditor(host, onValueChanged) {
+  if (!host.shadowRoot) {
+    return null;
+  }
+
+  if (!host._form) {
+    host.shadowRoot.innerHTML = `
+      <div class="editor-shell">
+        <ha-form class="editor-form"></ha-form>
+      </div>
+      ${buildBasicEditorStyles()}
+    `;
+    host._form = host.shadowRoot.querySelector(".editor-form");
+    host._form?.addEventListener("value-changed", onValueChanged);
+  }
+
+  return host._form || null;
+}
+
+function renderSingleFormEditor(host, buildFallbackConfig, buildSchema, buildData) {
+  const form = host._form;
+  if (!form) {
+    return;
+  }
+
+  const config = host._config || buildFallbackConfig();
+  form.hass = host._hass;
+  form.schema = buildSchema(config, host._rawConfig);
+  form.data = buildData(config, host._rawConfig);
+  form.computeLabel = (schema) => schema.label || schema.name || "";
+}
+
+function isPlainObjectEditorControllerValue(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/* src/_shared/metric-button.js */
+function applyMetricButtonState(hass, button, metric, options = {}) {
+  if (!button) {
+    return;
+  }
+
+  const nextValue = metric?.value || "—";
+  const previousValue = button.dataset.metricValue || "";
+  const valueEl = button.querySelector(".metric-text");
+  if (valueEl) {
+    valueEl.textContent = nextValue;
+  }
+
+  button.dataset.metricValue = nextValue;
+  button.dataset.entityId = metric?.entityId || "";
+  button.disabled = !metric?.available;
+  button.title = metric?.title || "";
+  button.setAttribute("aria-label", metric?.title || options.defaultAriaLabel || "Metric");
+  button.hidden = Boolean(options.hideWhenUnavailable && !metric?.configured);
+
+  const iconEl = button.querySelector(".metric-icon");
+  if (iconEl) {
+    syncEntityIcon(iconEl, hass, metric?.stateObj || null);
+  }
+
+  if (options.settleOnChange && shouldAnimateMetricValueSettle(previousValue, nextValue)) {
+    animateMetricButtonSettle(
+      button,
+      options.settleDurationMs ?? 220,
+      options.settleEasing ?? "cubic-bezier(0.22, 1, 0.36, 1)",
+    );
+  }
+}
+
+function buildMetricButtonMarkup(ref, primary) {
+  const buttonClass = primary ? "metric-button metric-button--primary" : "metric-button metric-button--chip";
+  const iconClass = primary ? "metric-icon metric-icon--primary" : "metric-icon metric-icon--chip";
+  return `
+    <button class="${buttonClass}" data-ref="${ref}" type="button">
+      <ha-state-icon class="${iconClass}" hidden></ha-state-icon>
+      <span class="metric-text">—</span>
+    </button>
+  `;
+}
+
+function syncMetricButtonRowVisibility(row, ...buttons) {
+  if (!row) {
+    return;
+  }
+  const hasVisibleButton = buttons.some((button) => button && button.hidden !== true);
+  row.hidden = !hasVisibleButton;
+}
+
+function shouldAnimateMetricValueSettle(previousValue, nextValue) {
+  return Boolean(previousValue)
+    && previousValue !== nextValue
+    && previousValue !== "—"
+    && nextValue !== "—";
+}
+
+function animateMetricButtonSettle(button, duration, easing) {
+  if (!button?.animate) {
+    return;
+  }
+  button.getAnimations().forEach((animation) => {
+    if (animation.id === "primary-settle") {
+      animation.cancel();
+    }
+  });
+  const animation = button.animate(
+    [
+      { transform: "translateY(1.5px)", opacity: 0.84 },
+      { transform: "translateY(0)", opacity: 1 },
+    ],
+    {
+      duration,
+      easing,
+      fill: "none",
+    },
+  );
+  animation.id = "primary-settle";
 }
 
 /* src/house-energy-bar-card.js */
@@ -787,14 +1366,17 @@ const COLOR_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const COLOR_TRANSITION = `260ms ${COLOR_EASING}`;
 const PRIMARY_SETTLE_DURATION_MS = 220;
 const EDITOR_ELEMENT_TAG = "house-energy-bar-editor";
-const CONFIG_CLEANUP_STEPS = [
-  createRemovePathsCleanup(["segment_tokens"]),
-  migrateLegacyHouseEnergyColors,
-];
-const EDITOR_CLEANUP_STEPS = [
-  createRemovePathsCleanup(["segment_tokens"]),
-  migrateLegacyHouseEnergyColors,
-];
+const CARD_DESCRIPTION = "House Energy Bar: compact home energy overview for Home Assistant.";
+const HOUSE_COLOR_FIELD_MAP = {
+  track: ["track"],
+  text_light: ["text_light", "text"],
+  text_dark: ["text_dark", "text"],
+  divider: ["divider"],
+  energy_source: ["energy_source"],
+  energy_storage_supply: ["energy_storage_supply"],
+  grid_import: ["grid_import"],
+  grid_export: ["grid_export"],
+};
 const SEGMENT_DEFS = SEGMENT_IDS.map((segmentId, index) => ({
   id: segmentId,
   number: index + 1,
@@ -811,6 +1393,7 @@ class HouseEnergyBarCard extends HTMLElement {
     this._rendered = false;
     this._lastSignature = "";
     this._refs = null;
+    this._showPreviewPlaceholder = false;
     this._onClick = (event) => this._handleClick(event);
   }
 
@@ -831,7 +1414,9 @@ class HouseEnergyBarCard extends HTMLElement {
     this._refs.shell.addEventListener("click", this._onClick);
     if (this._config) {
       this._applyTheme();
-      this._renderModel();
+      if (!this._showPreviewPlaceholder) {
+        this._renderModel();
+      }
     }
   }
 
@@ -842,20 +1427,33 @@ class HouseEnergyBarCard extends HTMLElement {
   }
 
   setConfig(config) {
-    const cleanup = runConfigCleanup(config, CONFIG_CLEANUP_STEPS);
+    const cleanup = runConfigCleanup(config, HOUSE_CONFIG_CLEANUP_STEPS);
+    const incomingType = cleanup.config?.type || config?.type || CARD_TYPE;
+    if (incomingType !== CARD_TYPE) {
+      throw new Error(`Card type must be '${CARD_TYPE}'.`);
+    }
     const normalized = normalizeConfig(cleanup.config);
-    validateConfig(normalized);
+    const hasRequiredEntities = hasRequiredEntityValues(normalized.entities, REQUIRED_ENTITY_KEYS);
+    if (hasRequiredEntities) {
+      validateConfig(normalized);
+    }
     this._config = normalized;
     this._lastSignature = "";
 
     this._ensureRendered();
+    this._syncPreviewPlaceholder(!hasRequiredEntities);
     this._applyTheme();
-    this._renderModel();
+    if (!this._showPreviewPlaceholder) {
+      this._renderModel();
+    }
   }
 
   set hass(hass) {
     this._hass = hass;
     if (!this._config) {
+      return;
+    }
+    if (this._showPreviewPlaceholder) {
       return;
     }
 
@@ -888,7 +1486,10 @@ class HouseEnergyBarCard extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <ha-card>
         <div class="shell">
-          ${SEGMENT_DEFS.map((segment) => buildSegmentSectionMarkup(segment)).join("")}
+          ${buildCardPreviewMarkup(CARD_DESCRIPTION)}
+          <div class="card-content">
+            ${SEGMENT_DEFS.map((segment) => buildSegmentSectionMarkup(segment)).join("")}
+          </div>
         </div>
       </ha-card>
       ${styles()}
@@ -896,6 +1497,8 @@ class HouseEnergyBarCard extends HTMLElement {
 
     this._refs = {
       shell: this.shadowRoot.querySelector(".shell"),
+      previewPlaceholder: this.shadowRoot.querySelector(".card-preview-placeholder"),
+      content: this.shadowRoot.querySelector(".card-content"),
       segments: SEGMENT_DEFS.reduce((result, segment) => {
         const section = this.shadowRoot.querySelector(`[data-segment="${segment.id}"]`);
         result[segment.id] = {
@@ -910,6 +1513,15 @@ class HouseEnergyBarCard extends HTMLElement {
         return result;
       }, {}),
     };
+  }
+
+  _syncPreviewPlaceholder(showPlaceholder) {
+    this._showPreviewPlaceholder = showPlaceholder === true;
+    syncCardPreviewVisibility(
+      this._refs?.previewPlaceholder,
+      [this._refs?.content],
+      this._showPreviewPlaceholder,
+    );
   }
 
   _renderModel() {
@@ -938,11 +1550,11 @@ class HouseEnergyBarCard extends HTMLElement {
         return;
       }
 
-      applyMetric(this._hass, segmentRefs.primary, segmentModel.primary, { settleOnChange: true });
+      applyMetricButtonState(this._hass, segmentRefs.primary, segmentModel.primary, buildMetricOptions(true));
       segmentRefs.secondaries.forEach((secondaryRef, index) => {
-        applyMetric(this._hass, secondaryRef, segmentModel.chips[index], { hideWhenUnavailable: true });
+        applyMetricButtonState(this._hass, secondaryRef, segmentModel.chips[index], buildMetricOptions(false, true));
       });
-      syncChipRowVisibility(segmentRefs.chipRow, ...segmentRefs.secondaries);
+      syncMetricButtonRowVisibility(segmentRefs.chipRow, ...segmentRefs.secondaries);
     });
 
     this._applySectionBackgrounds(config.colors, config.track_blend, config.fade_between_segments, visibleSegments);
@@ -1025,22 +1637,19 @@ class HouseEnergyBarEditor extends HTMLElement {
     this._rawConfig = null;
     this._hass = null;
     this._form = null;
-    this._cleanupState = {
-      pendingKey: "",
-      lastAppliedKey: "",
-    };
+    this._cleanupState = createEditorCleanupState();
     this._onFormValueChanged = (event) => this._handleFormValueChanged(event);
   }
 
   setConfig(config) {
-    const incoming = config && typeof config === "object" ? config : {};
-    const cleanup = runConfigCleanup(incoming, EDITOR_CLEANUP_STEPS);
-    this._rawConfig = {
-      ...cleanup.config,
-      type: cleanup.config.type || incoming.type || CARD_TYPE,
-    };
-    this._rawConfig.color_preset = normalizeColorPresetName(this._rawConfig.color_preset);
-    this._config = normalizeConfig(this._rawConfig);
+    const cleanup = applyEditorIncomingConfig(
+      this,
+      config,
+      HOUSE_EDITOR_CLEANUP_STEPS,
+      CARD_TYPE,
+      normalizeColorPresetName,
+      normalizeConfig,
+    );
     this._render();
     if (cleanup.changed) {
       queueConfigCleanup(this, this._rawConfig, this._cleanupState);
@@ -1062,30 +1671,16 @@ class HouseEnergyBarEditor extends HTMLElement {
   }
 
   _render() {
-    if (!this.shadowRoot) {
-      return;
-    }
-
-    if (!this._form) {
-      this.shadowRoot.innerHTML = `
-        <div class="editor-shell">
-          <ha-form class="editor-form"></ha-form>
-        </div>
-        ${editorStyles()}
-      `;
-      this._form = this.shadowRoot.querySelector(".editor-form");
-      this._form?.addEventListener("value-changed", this._onFormValueChanged);
-    }
-
+    this._form = ensureSingleFormEditor(this, this._onFormValueChanged);
     if (!this._form) {
       return;
     }
-
-    const config = this._config || normalizeConfig(HouseEnergyBarCard.getStubConfig());
-    this._form.hass = this._hass;
-    this._form.schema = buildEditorFormSchema(this._rawConfig);
-    this._form.data = buildHouseEditorFormData(config, this._rawConfig);
-    this._form.computeLabel = (schema) => schema.label || schema.name || "";
+    renderSingleFormEditor(
+      this,
+      () => normalizeConfig(HouseEnergyBarCard.getStubConfig()),
+      (_config, rawConfig) => buildEditorFormSchema(rawConfig),
+      buildHouseEditorFormData,
+    );
   }
 
   _handleFormValueChanged(event) {
@@ -1118,8 +1713,8 @@ class HouseEnergyBarEditor extends HTMLElement {
     if (useOverrides) {
       nextRaw.colors = {
         ...resolveEditorBackgroundColor(value.colors, this._rawConfig?.colors),
-        ...pickHouseColorOverrides(this._config?.colors),
-        ...(hadOverrides ? pickHouseEditorColorOverrides(value.colors) : {}),
+        ...pickMappedStringValues(this._config?.colors, HOUSE_COLOR_FIELD_MAP),
+        ...(hadOverrides ? pickMappedStringValues(value.colors, HOUSE_COLOR_FIELD_MAP) : {}),
       };
       nextRaw.track_blend = normalizeTrackBlendOverrideValue(
         value.track_blend,
@@ -1135,123 +1730,24 @@ class HouseEnergyBarEditor extends HTMLElement {
       }
     }
 
-    this._rawConfig = nextRaw;
-    this._config = normalizeConfig(this._rawConfig);
-
+    commitEditorRawConfig(this, nextRaw, normalizeConfig);
     this._render();
     emitConfigChanged(this, this._rawConfig);
   }
-}
-
-function applyMetric(hass, button, metric, options = {}) {
-  if (!button) {
-    return;
-  }
-
-  const nextValue = metric?.value || "—";
-  const previousValue = button.dataset.metricValue || "";
-  const valueEl = button.querySelector(".metric-text");
-  if (valueEl) {
-    valueEl.textContent = nextValue;
-  }
-
-  button.dataset.metricValue = nextValue;
-  button.dataset.entityId = metric?.entityId || "";
-  button.disabled = !metric?.available;
-  button.title = metric?.title || "";
-  button.setAttribute("aria-label", metric?.title || "Energy metric");
-  button.hidden = Boolean(options.hideWhenUnavailable && !metric?.configured);
-
-  const iconEl = button.querySelector(".metric-icon");
-  if (iconEl) {
-    syncEntityIcon(iconEl, hass, metric?.stateObj || null);
-  }
-
-  if (options.settleOnChange && shouldAnimatePrimarySettle(previousValue, nextValue)) {
-    animatePrimarySettle(button);
-  }
-}
-
-function syncChipRowVisibility(row, ...buttons) {
-  if (!row) {
-    return;
-  }
-  const hasVisibleChip = buttons.some((button) => button && button.hidden !== true);
-  row.hidden = !hasVisibleChip;
 }
 
 function buildSegmentSectionMarkup(segment) {
   return `
     <section class="section section--segment" aria-label="${segment.label}" data-segment="${segment.id}">
       <div class="primary-row">
-        ${buildMetricButton(`${segment.id}-primary`, true)}
+        ${buildMetricButtonMarkup(`${segment.id}-primary`, true)}
       </div>
       <div class="chip-row chip-row--segment">
-        ${buildMetricButton(`${segment.id}-secondary-1`, false)}
-        ${buildMetricButton(`${segment.id}-secondary-2`, false)}
+        ${buildMetricButtonMarkup(`${segment.id}-secondary-1`, false)}
+        ${buildMetricButtonMarkup(`${segment.id}-secondary-2`, false)}
       </div>
     </section>
   `;
-}
-
-function buildMetricButton(ref, primary) {
-  const buttonClass = primary ? "metric-button metric-button--primary" : "metric-button metric-button--chip";
-  const iconClass = primary ? "metric-icon metric-icon--primary" : "metric-icon metric-icon--chip";
-  return `
-    <button class="${buttonClass}" data-ref="${ref}" type="button">
-      <ha-state-icon class="${iconClass}" hidden></ha-state-icon>
-      <span class="metric-text">—</span>
-    </button>
-  `;
-}
-
-function syncEntityIcon(iconEl, hass, stateObj) {
-  if (!iconEl) {
-    return;
-  }
-
-  if (stateObj) {
-    iconEl.hass = hass || null;
-    iconEl.stateObj = stateObj;
-    iconEl.state = stateObj;
-    iconEl.hidden = false;
-    return;
-  }
-
-  iconEl.hass = hass || null;
-  iconEl.stateObj = null;
-  iconEl.state = null;
-  iconEl.hidden = true;
-}
-
-function shouldAnimatePrimarySettle(previousValue, nextValue) {
-  return Boolean(previousValue)
-    && previousValue !== nextValue
-    && previousValue !== "—"
-    && nextValue !== "—";
-}
-
-function animatePrimarySettle(button) {
-  if (!button?.animate) {
-    return;
-  }
-  button.getAnimations().forEach((animation) => {
-    if (animation.id === "primary-settle") {
-      animation.cancel();
-    }
-  });
-  const animation = button.animate(
-    [
-      { transform: "translateY(1.5px)", opacity: 0.84 },
-      { transform: "translateY(0)", opacity: 1 },
-    ],
-    {
-      duration: PRIMARY_SETTLE_DURATION_MS,
-      easing: COLOR_EASING,
-      fill: "none",
-    },
-  );
-  animation.id = "primary-settle";
 }
 
 function styles() {
@@ -1288,15 +1784,28 @@ function styles() {
 
       .shell {
         width: 100%;
-        height: var(--bb-bar-height);
+        display: block;
+      }
+
+      ${buildCardPreviewStyles("--bb-bar-height")}
+
+      .card-content {
+        width: 100%;
+        height: 100%;
         display: grid;
         grid-template-columns: var(--bb-columns);
         align-items: stretch;
+        grid-column: 1 / -1;
+        height: var(--bb-bar-height);
         background: var(--bb-track-bg);
         color: var(--bb-text);
         transition: background-color ${COLOR_TRANSITION}, color ${COLOR_TRANSITION};
         border-radius: var(--bb-radius);
         overflow: hidden;
+      }
+
+      .card-content[hidden] {
+        display: none !important;
       }
 
       .section {
@@ -1459,19 +1968,6 @@ function styles() {
   `;
 }
 
-function registerCustomCardMetadata(type, name, description) {
-  window.customCards = window.customCards || [];
-  if (window.customCards.some((item) => item.type === type)) {
-    return;
-  }
-  window.customCards.push({
-    type,
-    name,
-    description,
-    preview: true,
-  });
-}
-
 function registerCard() {
   if (!customElements.get(CARD_ELEMENT_TAG)) {
     customElements.define(CARD_ELEMENT_TAG, HouseEnergyBarCard);
@@ -1480,13 +1976,21 @@ function registerCard() {
   registerCustomCardMetadata(
     CARD_ELEMENT_TAG,
     CARD_NAME,
-    "House Energy Bar: compact metric overview with an optional solar lead segment for Home Assistant.",
+    CARD_DESCRIPTION,
   );
 }
 
-function buildTopFormSchema() {
-  const colorSelector = { text: {} };
+function buildMetricOptions(settleOnChange = false, hideWhenUnavailable = false) {
+  return {
+    defaultAriaLabel: "Energy metric",
+    hideWhenUnavailable,
+    settleOnChange,
+    settleDurationMs: PRIMARY_SETTLE_DURATION_MS,
+    settleEasing: COLOR_EASING,
+  };
+}
 
+function buildTopFormSchema() {
   return [
     {
       type: "expandable",
@@ -1496,20 +2000,18 @@ function buildTopFormSchema() {
           name: "bar_height",
           label: "Bar height (px)",
           required: true,
-          selector: { number: { min: 24, max: 72, step: 1, mode: "slider" } },
+          selector: buildSliderNumberSelector(EDITOR_SCHEMA_RANGE_BAR_HEIGHT),
         },
         {
           name: "corner_radius",
           label: "Corner radius (px)",
           required: true,
-          selector: { number: { min: 0, max: 30, step: 1, mode: "slider" } },
+          selector: buildSliderNumberSelector(EDITOR_SCHEMA_RANGE_CORNER_RADIUS),
         },
         {
           type: "grid",
           name: "colors",
-          schema: [
-            { name: "background", label: "Card background color", required: false, selector: colorSelector },
-          ],
+          schema: [buildBackgroundColorField()],
         },
         { name: "background_transparent", label: "Use transparent card background", selector: { boolean: {} } },
         { name: "show_divider", label: "Show separators between segments", selector: { boolean: {} } },
@@ -1560,17 +2062,15 @@ function buildBottomFormSchema(showSolarSegment) {
 }
 
 function buildColorOverridesGridSchema() {
-  const colorSelector = { text: {} };
-
   return [
-    { name: "track", label: "Base track color", required: false, selector: colorSelector },
-    { name: "text_light", label: "Light text and icon color", required: false, selector: colorSelector },
-    { name: "text_dark", label: "Dark text and icon color", required: false, selector: colorSelector },
-    { name: "divider", label: "Divider line color", required: false, selector: colorSelector },
-    { name: "energy_source", label: "PV color", required: false, selector: colorSelector },
-    { name: "energy_storage_supply", label: "Battery output color", required: false, selector: colorSelector },
-    { name: "grid_import", label: "Grid import color", required: false, selector: colorSelector },
-    { name: "grid_export", label: "Grid export color", required: false, selector: colorSelector },
+    { name: "track", label: "Base track color", required: false, selector: buildColorTextSelector() },
+    { name: "text_light", label: "Light text and icon color", required: false, selector: buildColorTextSelector() },
+    { name: "text_dark", label: "Dark text and icon color", required: false, selector: buildColorTextSelector() },
+    { name: "divider", label: "Divider line color", required: false, selector: buildColorTextSelector() },
+    { name: "energy_source", label: "PV color", required: false, selector: buildColorTextSelector() },
+    { name: "energy_storage_supply", label: "Battery output color", required: false, selector: buildColorTextSelector() },
+    { name: "grid_import", label: "Grid import color", required: false, selector: buildColorTextSelector() },
+    { name: "grid_export", label: "Grid export color", required: false, selector: buildColorTextSelector() },
   ];
 }
 
@@ -1606,7 +2106,7 @@ function buildColorSectionSchema(showOverrides) {
       name: "track_blend",
       label: "Track blend",
       required: false,
-      selector: { number: { min: 0.1, max: 0.4, step: 0.01, mode: "slider" } },
+      selector: buildSliderNumberSelector(EDITOR_SCHEMA_RANGE_TRACK_BLEND),
     });
     schema.push({
       type: "grid",
@@ -1635,169 +2135,8 @@ function buildEditorFormSchema(rawConfig) {
 function buildHouseEditorFormData(config, rawConfig) {
   return {
     ...config,
-    use_color_overrides: hasColorOverrides(rawConfig),
-    track_blend: resolveEditorTrackBlend(rawConfig, config.track_blend),
-    colors: {
-      ...pickBackgroundColor(rawConfig?.colors),
-      ...pickHouseEditorColorOverrides(rawConfig?.colors),
-    },
+    ...buildColorOverrideEditorState(config, rawConfig, HOUSE_COLOR_FIELD_MAP, DEFAULT_CONFIG.colors.background),
   };
-}
-
-function buildTopFormData(config) {
-  return {
-    bar_height: config.bar_height,
-    corner_radius: config.corner_radius,
-    show_solar_segment: config.show_solar_segment,
-    background_transparent: config.background_transparent,
-    show_divider: config.show_divider,
-    colors: pickBackgroundColor(config?.colors),
-  };
-}
-
-function hasColorOverrides(config) {
-  const colors = config?.colors;
-  const hasTokenOverrides = Boolean(colors)
-    && typeof colors === "object"
-    && Object.entries(colors).some(
-      ([key, value]) => key !== "background" && typeof value === "string" && value.trim().length > 0,
-    );
-  const trackBlend = Number(config?.track_blend);
-  return hasTokenOverrides || Number.isFinite(trackBlend);
-}
-
-function editorStyles() {
-  return `
-    <style>
-      .editor-shell {
-        display: grid;
-        gap: 12px;
-      }
-    </style>
-  `;
-}
-
-function syncEditorFormsHass(forms, hass) {
-  for (const form of forms) {
-    if (form) {
-      form.hass = hass;
-    }
-  }
-}
-
-function pickHouseColorOverrides(colors) {
-  const source = colors && typeof colors === "object" ? colors : {};
-  return {
-    track: source.track || "",
-    text_light: source.text_light || source.text || "",
-    text_dark: source.text_dark || source.text || "",
-    divider: source.divider || "",
-    energy_source: source.energy_source || "",
-    energy_storage_supply: source.energy_storage_supply || "",
-    grid_import: source.grid_import || "",
-    grid_export: source.grid_export || "",
-  };
-}
-
-function pickHouseEditorColorOverrides(colors) {
-  const source = colors && typeof colors === "object" ? colors : {};
-  return {
-    track: source.track || "",
-    text_light: source.text_light || source.text || "",
-    text_dark: source.text_dark || source.text || "",
-    divider: source.divider || "",
-    energy_source: source.energy_source || "",
-    energy_storage_supply: source.energy_storage_supply || "",
-    grid_import: source.grid_import || "",
-    grid_export: source.grid_export || "",
-  };
-}
-
-function pickBackgroundColor(colors) {
-  if (!colors || typeof colors !== "object" || typeof colors.background !== "string" || colors.background.trim().length === 0) {
-    return {};
-  }
-  const background = colors.background.trim();
-  if (background.toUpperCase() === DEFAULT_CONFIG.colors.background) {
-    return {};
-  }
-  return { background };
-}
-
-function resolveEditorBackgroundColor(formColors, fallbackColors) {
-  if (formColors && typeof formColors === "object" && Object.prototype.hasOwnProperty.call(formColors, "background")) {
-    return pickBackgroundColor(formColors);
-  }
-  return pickBackgroundColor(fallbackColors);
-}
-
-function resolveEditorTrackBlend(rawConfig, fallback) {
-  const trackBlend = Number(rawConfig?.track_blend);
-  if (!Number.isFinite(trackBlend)) {
-    return fallback;
-  }
-  return Math.min(0.4, Math.max(0.1, trackBlend));
-}
-
-function normalizeTrackBlendOverrideValue(value, fallback) {
-  const trackBlend = Number(value);
-  if (!Number.isFinite(trackBlend)) {
-    return fallback;
-  }
-  return Math.min(0.4, Math.max(0.1, trackBlend));
-}
-
-function migrateLegacyHouseEnergyColors(config) {
-  if (!config || typeof config !== "object" || !config.colors || typeof config.colors !== "object") {
-    return config;
-  }
-
-  const colors = config.colors;
-  const nextColors = {
-    ...colors,
-  };
-  let changed = false;
-
-  changed = moveLegacyHouseColor(nextColors, "segment1", "grid_import") || changed;
-  changed = moveLegacyHouseColor(nextColors, "segment2", "energy_storage_supply") || changed;
-  changed = moveLegacyHouseColor(nextColors, "segment3", "grid_export") || changed;
-  if (!nextColors.text_light && typeof colors.text === "string") {
-    nextColors.text_light = colors.text;
-    changed = true;
-  }
-  if (!nextColors.text_dark && typeof colors.text === "string") {
-    nextColors.text_dark = colors.text;
-    changed = true;
-  }
-  if ("text" in nextColors) {
-    delete nextColors.text;
-    changed = true;
-  }
-
-  if (!changed) {
-    return config;
-  }
-
-  return {
-    ...config,
-    colors: nextColors,
-  };
-}
-
-function moveLegacyHouseColor(colors, legacyKey, nextKey) {
-  let changed = false;
-
-  if (!colors[nextKey] && typeof colors[legacyKey] === "string") {
-    colors[nextKey] = colors[legacyKey];
-    changed = true;
-  }
-
-  if (legacyKey in colors) {
-    delete colors[legacyKey];
-    changed = true;
-  }
-
-  return changed;
 }
 
 function getVisibleSegmentDefs(config, model) {
