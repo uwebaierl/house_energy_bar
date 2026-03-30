@@ -1,3 +1,8 @@
+import {
+  DEFAULT_BAR_HEIGHT_PX,
+  DEFAULT_RADIUS_PX,
+} from "./_shared/layout-tokens.js";
+
 export const CARD_ELEMENT_TAG = "house-energy-bar";
 export const CARD_TYPE = "custom:house-energy-bar";
 export const CARD_NAME = "House Energy Bar";
@@ -38,8 +43,8 @@ export const SEGMENT_ENTITY_MAP = {
 export const DEFAULT_CONFIG = {
   type: CARD_TYPE,
   color_preset: "preset_1",
-  bar_height: 56,
-  corner_radius: 28,
+  bar_height: DEFAULT_BAR_HEIGHT_PX,
+  corner_radius: DEFAULT_RADIUS_PX,
   track_blend: 0.15,
   fade_between_segments: false,
   show_solar_segment: false,

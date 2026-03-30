@@ -8,6 +8,7 @@ House Energy Bar is a compact Home Assistant Lovelace card with 3 core semantic 
 
 - Compact daily totals card for grid import, battery output, and grid export, with an optional PV lead segment
 - Primary metric plus up to two secondary metrics per segment
+- Consistent metric typography and spacing for stacked use with Battery Bar and PowerFlow Bar
 - Shared preset-based color themes with optional manual overrides
 - Built-in visual editor for layout, colors, and entities
 - Clickable values that open Home Assistant `more-info`

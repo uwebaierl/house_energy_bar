@@ -32,6 +32,30 @@ function formatEntityStateValue(hass, stateObj, overrideState) {
   return hass.formatEntityState(stateObj, String(raw));
 }
 
+/* src/_shared/layout-tokens.js */
+const DEFAULT_BAR_HEIGHT_PX = 56;
+const DEFAULT_RADIUS_PX = 28;
+const DEFAULT_TRACK_COLOR = "#eaecef";
+const DEFAULT_TEXT_COLOR = "#2e2e2e";
+const THREE_COLUMN_TEMPLATE = "minmax(0, 1.12fr) minmax(0, 1fr) minmax(0, 1fr)";
+const FIXED_LINE_GAP_PX = 4;
+const PRIMARY_METRIC_FONT_PX = "15px";
+const PRIMARY_METRIC_FONT_WEIGHT = 500;
+const CHIP_FONT_PX = "12px";
+const CHIP_METRIC_FONT_WEIGHT = 400;
+const PRIMARY_METRIC_GAP_PX = 5;
+const SECONDARY_METRIC_GAP_PX = 10;
+const CHIP_METRIC_GAP_PX = 3;
+const FOCUS_RING_OUTLINE = "2px solid var(--primary-color, #03a9f4)";
+const FOCUS_RING_RADIUS_PX = 8;
+const PRIMARY_METRIC_LINE_HEIGHT = 1.05;
+const PRIMARY_METRIC_LETTER_SPACING = "-0.02em";
+const PRIMARY_ICON_SCALE = 0.92;
+const CHIP_ICON_SCALE = 0.9;
+const PRIMARY_ICON_TINT = 88;
+const CHIP_ICON_TINT = 82;
+const CHIP_ICON_Y_OFFSET = "0.01em";
+
 /* src/constants.js */
 const CARD_ELEMENT_TAG = "house-energy-bar";
 const CARD_TYPE = "custom:house-energy-bar";
@@ -73,8 +97,8 @@ const SEGMENT_ENTITY_MAP = {
 const DEFAULT_CONFIG = {
   type: CARD_TYPE,
   color_preset: "preset_1",
-  bar_height: 56,
-  corner_radius: 28,
+  bar_height: DEFAULT_BAR_HEIGHT_PX,
+  corner_radius: DEFAULT_RADIUS_PX,
   track_blend: 0.15,
   fade_between_segments: false,
   show_solar_segment: false,
@@ -1361,7 +1385,6 @@ function animateMetricButtonSettle(button, duration, easing) {
 }
 
 /* src/house-energy-bar-card.js */
-const FIXED_LINE_GAP_PX = 3;
 const COLOR_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const COLOR_TRANSITION = `260ms ${COLOR_EASING}`;
 const PRIMARY_SETTLE_DURATION_MS = 220;
@@ -1531,7 +1554,7 @@ class HouseEnergyBarCard extends HTMLElement {
     const firstVisibleId = visibleSegments[0]?.id || "";
     const visibleIds = new Set(visibleSegments.map((segment) => segment.id));
 
-    this.style.setProperty("--bb-columns", resolveColumnsTemplate(visibleSegments.length));
+    this.style.setProperty("--card-columns", resolveColumnsTemplate(visibleSegments.length));
 
     SEGMENT_DEFS.forEach((segment) => {
       const segmentRefs = this._refs?.segments?.[segment.id];
@@ -1565,17 +1588,16 @@ class HouseEnergyBarCard extends HTMLElement {
     const colors = config.colors;
     const trackTextColor = pickBestTextColor(colors.track, colors.text_light, colors.text_dark);
 
-    this.style.setProperty("--bb-bar-height", `${config.bar_height}px`);
-    this.style.setProperty("--bb-radius", `${config.corner_radius}px`);
-    this.style.setProperty("--bb-card-bg", config.background_transparent ? "transparent" : colors.background);
-    this.style.setProperty("--bb-track-bg", colors.track);
-    this.style.setProperty("--bb-text", trackTextColor);
-    this.style.setProperty("--bb-line-gap", `${FIXED_LINE_GAP_PX}px`);
-    this.style.setProperty("--bb-primary-font-segment1", "17px");
-    this.style.setProperty("--bb-primary-font-segment", "17px");
-    this.style.setProperty("--bb-chip-font", "12px");
-    this.style.setProperty("--bb-divider", colors.divider);
-    this.style.setProperty("--bb-divider-opacity", config.show_divider ? "1" : "0");
+    this.style.setProperty("--card-bar-height", `${config.bar_height}px`);
+    this.style.setProperty("--card-radius", `${config.corner_radius}px`);
+    this.style.setProperty("--card-bg", config.background_transparent ? "transparent" : colors.background);
+    this.style.setProperty("--card-track", colors.track);
+    this.style.setProperty("--card-text", trackTextColor);
+    this.style.setProperty("--card-line-gap", `${FIXED_LINE_GAP_PX}px`);
+    this.style.setProperty("--card-primary-font", PRIMARY_METRIC_FONT_PX);
+    this.style.setProperty("--card-chip-font", CHIP_FONT_PX);
+    this.style.setProperty("--card-divider", colors.divider);
+    this.style.setProperty("--card-divider-opacity", config.show_divider ? "1" : "0");
   }
 
   _applySectionBackgrounds(colors, trackBlend, fadeBetweenSegments, visibleSegments) {
@@ -1755,19 +1777,29 @@ function styles() {
     <style>
       :host {
         display: block;
-        --bb-bar-height: 56px;
-        --bb-radius: 28px;
-        --bb-card-bg: #000000;
-        --bb-track-bg: #eaecef;
-        --bb-columns: minmax(0, 1.12fr) minmax(0, 1fr) minmax(0, 1fr);
-        --bb-text: #2e2e2e;
-        --bb-line-gap: 3px;
-        --bb-primary-font-segment1: 17px;
-        --bb-primary-font-segment: 17px;
-        --bb-chip-font: 12px;
-        --bb-divider: #dbdde0;
-        --bb-divider-opacity: 0;
-        color: var(--bb-text);
+        --card-bar-height: ${DEFAULT_CONFIG.bar_height}px;
+        --card-radius: ${DEFAULT_CONFIG.corner_radius}px;
+        --card-bg: #000000;
+        --card-track: ${DEFAULT_TRACK_COLOR};
+        --card-columns: ${THREE_COLUMN_TEMPLATE};
+        --card-text: ${DEFAULT_TEXT_COLOR};
+        --card-line-gap: ${FIXED_LINE_GAP_PX}px;
+        --card-primary-font: ${PRIMARY_METRIC_FONT_PX};
+        --card-chip-font: ${CHIP_FONT_PX};
+        --card-chip-font-weight: ${CHIP_METRIC_FONT_WEIGHT};
+        --card-primary-gap: ${PRIMARY_METRIC_GAP_PX}px;
+        --card-secondary-gap: ${SECONDARY_METRIC_GAP_PX}px;
+        --card-chip-gap: ${CHIP_METRIC_GAP_PX}px;
+        --card-focus-outline: ${FOCUS_RING_OUTLINE};
+        --card-focus-radius: ${FOCUS_RING_RADIUS_PX}px;
+        --card-primary-line-height: ${PRIMARY_METRIC_LINE_HEIGHT};
+        --card-primary-letter-spacing: ${PRIMARY_METRIC_LETTER_SPACING};
+        --card-primary-icon-tint: ${PRIMARY_ICON_TINT}%;
+        --card-chip-icon-tint: ${CHIP_ICON_TINT}%;
+        --card-chip-icon-offset-y: ${CHIP_ICON_Y_OFFSET};
+        --card-divider: #dbdde0;
+        --card-divider-opacity: 0;
+        color: var(--card-text);
       }
 
       * {
@@ -1775,8 +1807,8 @@ function styles() {
       }
 
       ha-card {
-        background: var(--bb-card-bg);
-        color: var(--bb-text);
+        background: var(--card-bg);
+        color: var(--card-text);
         transition: background-color ${COLOR_TRANSITION}, color ${COLOR_TRANSITION};
         box-shadow: none !important;
         border: 0 !important;
@@ -1787,20 +1819,20 @@ function styles() {
         display: block;
       }
 
-      ${buildCardPreviewStyles("--bb-bar-height")}
+      ${buildCardPreviewStyles("--card-bar-height")}
 
       .card-content {
         width: 100%;
         height: 100%;
         display: grid;
-        grid-template-columns: var(--bb-columns);
+        grid-template-columns: var(--card-columns);
         align-items: stretch;
         grid-column: 1 / -1;
-        height: var(--bb-bar-height);
-        background: var(--bb-track-bg);
-        color: var(--bb-text);
+        height: var(--card-bar-height);
+        background: var(--card-track);
+        color: var(--card-text);
         transition: background-color ${COLOR_TRANSITION}, color ${COLOR_TRANSITION};
-        border-radius: var(--bb-radius);
+        border-radius: var(--card-radius);
         overflow: hidden;
       }
 
@@ -1813,7 +1845,7 @@ function styles() {
         display: flex;
         flex-direction: column;
         justify-content: center;
-        gap: var(--bb-line-gap);
+        gap: var(--card-line-gap);
         padding: 0 10px;
         position: relative;
         transition: background ${COLOR_TRANSITION};
@@ -1830,8 +1862,8 @@ function styles() {
         top: 18%;
         width: 1px;
         height: 64%;
-        background: color-mix(in srgb, var(--bb-divider) 58%, transparent);
-        opacity: var(--bb-divider-opacity);
+        background: color-mix(in srgb, var(--card-divider) 58%, transparent);
+        opacity: var(--card-divider-opacity);
       }
 
       .section--first-visible::before {
@@ -1857,7 +1889,7 @@ function styles() {
       }
 
       .chip-row--segment {
-        gap: 10px;
+        gap: var(--card-secondary-gap);
       }
 
       .chip-row[hidden],
@@ -1879,9 +1911,9 @@ function styles() {
       }
 
       .metric-button:focus-visible {
-        outline: 2px solid var(--primary-color, #03a9f4);
+        outline: var(--card-focus-outline);
         outline-offset: 2px;
-        border-radius: 8px;
+        border-radius: var(--card-focus-radius);
       }
 
       .metric-button:disabled {
@@ -1893,14 +1925,14 @@ function styles() {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        gap: 5px;
+        gap: var(--card-primary-gap);
       }
 
       .metric-button--chip {
         max-width: 100%;
         display: inline-flex;
         align-items: center;
-        gap: 3px;
+        gap: var(--card-chip-gap);
         line-height: 1;
         position: relative;
       }
@@ -1913,27 +1945,22 @@ function styles() {
         padding: 0;
         vertical-align: middle;
         line-height: 1;
+        --icon-primary-color: currentColor;
       }
 
       .metric-icon--primary {
-        width: calc(var(--bb-primary-font-segment) * 0.92);
-        height: calc(var(--bb-primary-font-segment) * 0.92);
-        --mdc-icon-size: calc(var(--bb-primary-font-segment) * 0.92);
-        color: color-mix(in srgb, currentColor 88%, transparent);
-      }
-
-      .section--lead .metric-icon--primary {
-        width: calc(var(--bb-primary-font-segment1) * 0.92);
-        height: calc(var(--bb-primary-font-segment1) * 0.92);
-        --mdc-icon-size: calc(var(--bb-primary-font-segment1) * 0.92);
+        width: calc(var(--card-primary-font) * ${PRIMARY_ICON_SCALE});
+        height: calc(var(--card-primary-font) * ${PRIMARY_ICON_SCALE});
+        --mdc-icon-size: calc(var(--card-primary-font) * ${PRIMARY_ICON_SCALE});
+        color: color-mix(in srgb, currentColor var(--card-primary-icon-tint), transparent);
       }
 
       .metric-icon--chip {
         width: auto;
         height: auto;
-        --mdc-icon-size: calc(var(--bb-chip-font) * 0.9);
-        color: color-mix(in srgb, currentColor 82%, transparent);
-        transform: translateY(0.01em);
+        --mdc-icon-size: calc(var(--card-chip-font) * ${CHIP_ICON_SCALE});
+        color: color-mix(in srgb, currentColor var(--card-chip-icon-tint), transparent);
+        transform: translateY(var(--card-chip-icon-offset-y));
       }
 
       .metric-text {
@@ -1944,23 +1971,16 @@ function styles() {
       }
 
       .metric-button--primary .metric-text {
-        font-weight: 700;
-        line-height: 1.05;
-        letter-spacing: -0.02em;
-      }
-
-      .section--lead .metric-button--primary .metric-text {
-        font-size: var(--bb-primary-font-segment1);
-      }
-
-      .section--segment .metric-button--primary .metric-text {
-        font-size: var(--bb-primary-font-segment);
+        font-size: var(--card-primary-font);
+        font-weight: ${PRIMARY_METRIC_FONT_WEIGHT};
+        line-height: var(--card-primary-line-height);
+        letter-spacing: var(--card-primary-letter-spacing);
       }
 
       .metric-button--chip .metric-text {
         display: block;
-        font-size: var(--bb-chip-font);
-        font-weight: 400;
+        font-size: var(--card-chip-font);
+        font-weight: var(--card-chip-font-weight);
         line-height: 1;
         align-self: center;
       }
@@ -2155,7 +2175,7 @@ function resolveColumnsTemplate(visibleCount) {
   if (visibleCount >= 4) {
     return "repeat(4, minmax(0, 1fr))";
   }
-  return "minmax(0, 1.12fr) minmax(0, 1fr) minmax(0, 1fr)";
+  return THREE_COLUMN_TEMPLATE;
 }
 
 /* src/index.js */
